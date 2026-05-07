@@ -1,0 +1,8 @@
+[
+{
+  "directory": "E:/Factorio-pt'/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\main.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\main.cpp\"",
+  "file": "E:/Factorio-pt'/runtime/src/main.cpp",
+  "output": "E:/Factorio-pt'/build/runtime/CMakeFiles/factorio_pt_runtime.dir/src/main.cpp.obj"
+}
+]

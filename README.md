@@ -11,13 +11,18 @@ Projekt gry typu automation/strategy w klimacie Factorio, rozszerzony o polityk�
 
 ## Aktualny kamień milowy
 
-**M1: foundation skeleton (zakończony)**  
-Utworzono bazę techniczną:
+**M6: system generator bootstrap (zakończony)**  
+Utworzono bazę techniczną i pierwszy krok gameplay loop:
 
 - C++ runtime (`runtime/`)
 - Rust simulation crate (`sim-rust/`)
 - C# tools app (`tools-csharp/`)
 - wspólny skrypt build (`scripts/build.ps1`)
+- integracja C++ <-> Rust (`sim_bootstrap`)
+- tick symulacji w Rust (`sim_tick`) i odczyt stanu na żywo w runtime
+- decyzje polityczne MVP: `sim_set_policy(wage, tax)` wpływające na stabilność i zanieczyszczenie
+- generator planety (`sim_generate_planet`) z profilem wysokości pod 2.5D i podstawowymi zasobami
+- generator układu (`sim_generate_system`) dla 10 planet core oraz wariantów planet (`sim_generate_planet_from_core`)
 
 ## Struktura repo
 
@@ -36,6 +41,8 @@ PowerShell:
 ```powershell
 .\scripts\build.ps1 -Configuration Debug
 ```
+
+Skrypt używa toolchainu MinGW/Ninja (`C:\msys64\ucrt64\bin`) oraz Rust target `x86_64-pc-windows-gnu`.
 
 ## MVP (v0.1)
 

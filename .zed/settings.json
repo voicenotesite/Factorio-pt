@@ -1,0 +1,17 @@
+{
+  "lsp": {
+    "clangd": {
+      "settings": {
+        "clangd.compilationDatabasePath": "./build",
+      },
+    },
+  },
+  "languages": {
+    "C": {
+      "language_servers": ["clangd"],
+    },
+    "C++": {
+      "language_servers": ["clangd"],
+    },
+  },
+}

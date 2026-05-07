@@ -30,5 +30,11 @@ Generowanie układów i planet: 10 planet core + planety proceduralne, z zachowa
 
 ## Status
 
-**planned**
+**in_progress**
+
+## Aktualnie zaimplementowane
+
+- `sim_generate_planet(seed, width, height)` — bazowy generator planety.
+- `sim_generate_planet_from_core(seed, core_profile_id, width, height)` — planeta oparta o 1 z 10 core profili.
+- `sim_generate_system(seed)` — bootstrap układu 10 planet core z agregatami wysokości i unikalnych stref.
 
