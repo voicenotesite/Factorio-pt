@@ -1,0 +1,8 @@
+build/
+**/bin/
+**/obj/
+**/target/
+.vs/
+.idea/
+.vscode/
+

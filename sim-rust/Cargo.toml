@@ -1,0 +1,9 @@
+[package]
+name = "factorio_pt_sim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "factorio_pt_sim"
+crate-type = ["cdylib", "rlib"]
+
