@@ -262,6 +262,7 @@ struct RuntimeState {
   float frame_time_ms = 0.0f;
   float water_anim = 0.0f;
   float theme_shift = 0.0f;
+  float day_time_s = 0.0f;
 
   SimSnapshot snapshot{};
   PlanetSummary world{};
@@ -275,6 +276,9 @@ struct RuntimeState {
   int inv_copper_ore = 0;
   int inv_coal_ore = 0;
   int inv_iron_plate = 10;
+  int mined_total = 0;
+  int smelted_total = 0;
+  int extractors_built_total = 0;
   std::string status_text = "Ready.";
   float status_timer_s = 0.0f;
 };

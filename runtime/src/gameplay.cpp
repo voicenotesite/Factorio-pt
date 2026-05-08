@@ -16,6 +16,7 @@ void TryMine(RuntimeState& state) {
   if (tile->resource == ResourceType::Iron) state.inv_iron_ore += gain;
   if (tile->resource == ResourceType::Copper) state.inv_copper_ore += gain;
   if (tile->resource == ResourceType::Coal) state.inv_coal_ore += gain;
+  state.mined_total += gain;
   tile->ore_units = static_cast<std::uint16_t>(tile->ore_units - gain);
   const char* name = ResourceLabel(tile->resource);
   if (tile->ore_units == 0) tile->resource = ResourceType::None;
@@ -33,6 +34,7 @@ void TrySmelt(RuntimeState& state) {
   state.inv_iron_ore -= 2;
   state.inv_coal_ore -= 1;
   state.inv_iron_plate += 1;
+  state.smelted_total += 1;
   SetStatus(state, "Wytopiono +1 iron plate.", 2.0f);
 }
 
@@ -58,6 +60,7 @@ void TryToggleDrill(RuntimeState& state) {
 
   state.inv_iron_plate -= 4;
   state.machines.push_back({state.player_x, state.player_y, tile->resource, 0.0f});
+  state.extractors_built_total += 1;
   std::ostringstream ss;
   ss << "Postawiono extractor na " << ResourceLabel(tile->resource) << ".";
   SetStatus(state, ss.str());

@@ -134,6 +134,7 @@ int RunRuntimeWindow(SimTickFn sim_tick,
     constexpr float sim_dt = 1.0f / 60.0f;
     state.snapshot = sim_tick(sim_dt);
     UpdateMachines(state, sim_dt);
+    state.day_time_s += sim_dt;
     if (state.status_timer_s > 0.0f) {
       state.status_timer_s = std::max(0.0f, state.status_timer_s - sim_dt);
       if (state.status_timer_s <= 0.0f) state.status_text.clear();

@@ -147,6 +147,36 @@ void DrawResourcePatch(RuntimeState& state, ResourceType resource, int cx, int c
   }
 }
 
+void DrawBiomeProp(RuntimeState& state, const WorldTile& tile, int cx, int cy, std::uint32_t variant) {
+  if (tile.resource != ResourceType::None || tile.terrain == TerrainType::Water) return;
+  const bool spawn = ((variant ^ 0x5A) % 17u) == 0u;
+  if (!spawn) return;
+
+  COLORREF prop = RGB(120, 170, 110);
+  if (tile.biome_region == 1) prop = RGB(167, 149, 104);
+  if (tile.biome_region == 2) prop = RGB(130, 165, 186);
+  if (tile.biome_region == 3) prop = RGB(147, 136, 126);
+  if (tile.terrain == TerrainType::Mountain) prop = RGB(160, 150, 142);
+
+  HBRUSH brush = CreateSolidBrush(prop);
+  HPEN pen = CreatePen(PS_SOLID, 1, RGB(28, 28, 28));
+  HGDIOBJ old_brush = SelectObject(state.back_dc, brush);
+  HGDIOBJ old_pen = SelectObject(state.back_dc, pen);
+
+  if (tile.biome_region == 0 || tile.biome_region == 2) {
+    Ellipse(state.back_dc, cx - 3, cy - 10, cx + 4, cy - 2);
+    MoveToEx(state.back_dc, cx, cy - 2, nullptr);
+    LineTo(state.back_dc, cx, cy + 2);
+  } else {
+    Rectangle(state.back_dc, cx - 3, cy - 8, cx + 3, cy - 2);
+  }
+
+  SelectObject(state.back_dc, old_pen);
+  SelectObject(state.back_dc, old_brush);
+  DeleteObject(brush);
+  DeleteObject(pen);
+}
+
 void DrawProgressBar(RuntimeState& state, int x, int y, int w, int h, float t, COLORREF good_col) {
   t = std::clamp(t, 0.0f, 1.0f);
   HBRUSH bg = CreateSolidBrush(RGB(34, 41, 53));
@@ -197,6 +227,12 @@ void DrawHud(RuntimeState& state) {
   std::ostringstream cam;
   cam << "Camera (" << state.camera_x << ", " << state.camera_y << ")";
   draw_line(cam.str(), RGB(233, 235, 242));
+  std::ostringstream day;
+  const int day_num = static_cast<int>(state.day_time_s / 180.0f) + 1;
+  const int day_part = static_cast<int>(std::fmod(state.day_time_s, 180.0f) / 45.0f);
+  static const char* kDayNames[4] = {"Dawn", "Day", "Dusk", "Night"};
+  day << "Cycle: Day " << day_num << " - " << kDayNames[std::clamp(day_part, 0, 3)];
+  draw_line(day.str(), RGB(233, 235, 242));
 
   y += 8;
   draw_line("SIM METRICS", RGB(255, 219, 148));
@@ -224,6 +260,15 @@ void DrawHud(RuntimeState& state) {
   draw_line(mach.str(), RGB(225, 231, 244));
 
   y += 8;
+  draw_line("OBJECTIVES", RGB(255, 219, 148));
+  auto obj_line = [&](const std::string& text, bool done) {
+    draw_line(std::string(done ? "[x] " : "[ ] ") + text, done ? RGB(149, 220, 143) : RGB(219, 225, 238), 20);
+  };
+  obj_line("Mine 50 ore", state.mined_total >= 50);
+  obj_line("Smelt 12 plates", state.smelted_total >= 12);
+  obj_line("Build 3 extractors", state.extractors_built_total >= 3);
+
+  y += 8;
   draw_line("CONTROLS", RGB(154, 225, 255));
   draw_line("WASD = move  |  IJKL = pan", RGB(233, 235, 242));
   draw_line("E = mine  |  F = smelt plate", RGB(233, 235, 242));
@@ -239,9 +284,17 @@ void DrawHud(RuntimeState& state) {
 }
 
 void DrawSkyGradient(RuntimeState& state) {
-  const std::uint32_t top = PackColor(18, 24, 36);
-  const std::uint32_t mid = PackColor(32, 44, 62);
-  const std::uint32_t bottom = PackColor(17, 20, 28);
+  const float cycle = std::fmod(state.day_time_s, 180.0f) / 180.0f;
+  const float phase = 0.5f + 0.5f * std::sin(cycle * 6.283185f - 1.570796f);
+  const std::uint32_t night_top = PackColor(10, 14, 24);
+  const std::uint32_t night_mid = PackColor(20, 28, 40);
+  const std::uint32_t night_bottom = PackColor(12, 16, 24);
+  const std::uint32_t day_top = PackColor(54, 90, 132);
+  const std::uint32_t day_mid = PackColor(92, 128, 168);
+  const std::uint32_t day_bottom = PackColor(30, 46, 68);
+  const std::uint32_t top = LerpColor(night_top, day_top, phase);
+  const std::uint32_t mid = LerpColor(night_mid, day_mid, phase);
+  const std::uint32_t bottom = LerpColor(night_bottom, day_bottom, phase);
   for (int y = 0; y < state.client_h; ++y) {
     const float t = static_cast<float>(y) / static_cast<float>(state.client_h - 1);
     const std::uint32_t col = t < 0.5f ? LerpColor(top, mid, t * 2.0f) : LerpColor(mid, bottom, (t - 0.5f) * 2.0f);
@@ -300,6 +353,7 @@ void RenderWorld(RuntimeState& state) {
           DrawResourcePatch(state, tile.resource, base_x, top_cy, variant ^ 0x3Du);
         }
       }
+      DrawBiomeProp(state, tile, base_x, top_cy, variant ^ 0x2Eu);
 
       if (FindMachineAt(state, wx, wy) != nullptr) {
         DrawMachineGlyph(state, base_x, top_cy);
