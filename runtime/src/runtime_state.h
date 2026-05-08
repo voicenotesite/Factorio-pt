@@ -68,6 +68,7 @@ struct WorldTile {
   ResourceType resource;
   std::uint8_t height_level;
   std::uint16_t ore_units;
+  std::uint8_t biome_region;
 };
 
 struct Machine {

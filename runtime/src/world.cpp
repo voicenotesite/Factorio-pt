@@ -119,6 +119,8 @@ void GenerateWorld(RuntimeState& state) {
   std::vector<float> elevation(static_cast<std::size_t>(total_tiles), 0.0f);
   std::vector<float> roughness(static_cast<std::size_t>(total_tiles), 0.0f);
   std::vector<float> moisture(static_cast<std::size_t>(total_tiles), 0.0f);
+  std::vector<float> climate(static_cast<std::size_t>(total_tiles), 0.0f);
+  std::vector<float> heat(static_cast<std::size_t>(total_tiles), 0.0f);
 
   const float base_scale = 0.028f;
   const float warp_scale = 0.014f;
@@ -136,10 +138,19 @@ void GenerateWorld(RuntimeState& state) {
       const float continental = FractalNoise(nx * 0.7f, ny * 0.7f, state.world.seed ^ 0x1000u, 5, 2.0f, 0.5f);
       const float detail = FractalNoise(nx * 2.0f, ny * 2.0f, state.world.seed ^ 0x2000u, 4, 2.1f, 0.55f);
       const float ridge = std::abs(FractalNoise(nx * 1.4f, ny * 1.4f, state.world.seed ^ 0x3000u, 3, 2.0f, 0.5f) * 2.0f - 1.0f);
-      elevation[idx] = std::clamp(continental * 0.65f + detail * 0.20f + (1.0f - ridge) * 0.15f, 0.0f, 1.0f);
+      const float climate_field = FractalNoise(nx * 0.35f, ny * 0.35f, state.world.seed ^ 0x6111u, 4, 2.0f, 0.55f);
+      const float heat_field = FractalNoise(nx * 0.42f + 11.0f, ny * 0.42f + 29.0f, state.world.seed ^ 0x6222u, 4, 2.0f, 0.55f);
+      climate[idx] = climate_field;
+      heat[idx] = heat_field;
+
+      const float regional_bias = (climate_field - 0.5f) * 0.16f + (heat_field - 0.5f) * 0.08f;
+      elevation[idx] = std::clamp(continental * 0.60f + detail * 0.20f + (1.0f - ridge) * 0.15f + regional_bias, 0.0f, 1.0f);
 
       roughness[idx] = FractalNoise(nx * 3.2f, ny * 3.2f, state.world.seed ^ 0x4000u, 3, 2.0f, 0.5f);
-      moisture[idx] = FractalNoise(nx * 1.5f, ny * 1.5f, state.world.seed ^ 0x5000u, 4, 2.0f, 0.55f);
+      moisture[idx] = std::clamp(FractalNoise(nx * 1.5f, ny * 1.5f, state.world.seed ^ 0x5000u, 4, 2.0f, 0.55f) * 0.75f +
+                                     climate_field * 0.25f,
+                                 0.0f,
+                                 1.0f);
     }
   }
 
@@ -158,10 +169,18 @@ void GenerateWorld(RuntimeState& state) {
       const std::size_t idx = TileIndex(state, x, y);
       TerrainType terrain = TerrainType::Lowland;
       const float h = elevation[idx];
-      if (h < water_t) terrain = TerrainType::Water;
-      else if (h >= high_t) terrain = TerrainType::Mountain;
-      else if (h >= mid_t) terrain = TerrainType::Highland;
-      else if (h >= low_t) terrain = TerrainType::Midland;
+      const float local_moisture = moisture[idx];
+      const float local_heat = heat[idx];
+
+      const float water_local = water_t + (local_moisture - 0.5f) * 0.08f - (local_heat - 0.5f) * 0.04f;
+      const float high_local = high_t + (local_heat - 0.5f) * 0.06f - (local_moisture - 0.5f) * 0.03f;
+      const float mid_local = mid_t + (local_heat - 0.5f) * 0.02f;
+      const float low_local = low_t - (local_moisture - 0.5f) * 0.02f;
+
+      if (h < water_local) terrain = TerrainType::Water;
+      else if (h >= high_local) terrain = TerrainType::Mountain;
+      else if (h >= mid_local) terrain = TerrainType::Highland;
+      else if (h >= low_local) terrain = TerrainType::Midland;
       else terrain = TerrainType::Lowland;
 
       std::uint8_t level = 1;
@@ -173,7 +192,8 @@ void GenerateWorld(RuntimeState& state) {
         case TerrainType::Mountain: level = static_cast<std::uint8_t>(4 + static_cast<int>(roughness[idx] > 0.50f)); break;
       }
 
-      state.tiles[idx] = {terrain, ResourceType::None, level, 0u};
+      const std::uint8_t biome_region = static_cast<std::uint8_t>(std::clamp(static_cast<int>(climate[idx] * 3.999f), 0, 3));
+      state.tiles[idx] = {terrain, ResourceType::None, level, 0u, biome_region};
 
       if (!IsOreTerrain(terrain)) continue;
 
@@ -183,13 +203,17 @@ void GenerateWorld(RuntimeState& state) {
       const float blob_copper = FractalNoise(fx, fy, state.world.seed ^ 0xC22u, 4, 2.1f, 0.52f);
       const float blob_coal = FractalNoise(fx, fy, state.world.seed ^ 0xC33u, 4, 2.1f, 0.52f);
 
-      const float terrain_pref_iron = (terrain == TerrainType::Mountain ? 0.20f : terrain == TerrainType::Highland ? 0.13f : 0.05f);
-      const float terrain_pref_copper = (terrain == TerrainType::Highland ? 0.17f : terrain == TerrainType::Midland ? 0.10f : 0.02f);
-      const float terrain_pref_coal = (terrain == TerrainType::Midland ? 0.14f : terrain == TerrainType::Lowland ? 0.11f : 0.03f);
+      const float climate_pref_iron = (biome_region == 3 ? 0.10f : biome_region == 2 ? 0.06f : 0.02f);
+      const float climate_pref_copper = (biome_region == 1 ? 0.10f : biome_region == 0 ? 0.06f : 0.02f);
+      const float climate_pref_coal = (biome_region == 0 ? 0.10f : biome_region == 2 ? 0.08f : 0.03f);
 
-      iron_score[idx] = blob_iron * 0.72f + roughness[idx] * 0.20f + terrain_pref_iron;
-      copper_score[idx] = blob_copper * 0.72f + (1.0f - roughness[idx]) * 0.10f + terrain_pref_copper;
-      coal_score[idx] = blob_coal * 0.70f + moisture[idx] * 0.18f + terrain_pref_coal;
+      const float terrain_pref_iron = (terrain == TerrainType::Mountain ? 0.18f : terrain == TerrainType::Highland ? 0.11f : 0.03f);
+      const float terrain_pref_copper = (terrain == TerrainType::Highland ? 0.16f : terrain == TerrainType::Midland ? 0.10f : 0.03f);
+      const float terrain_pref_coal = (terrain == TerrainType::Midland ? 0.13f : terrain == TerrainType::Lowland ? 0.10f : 0.04f);
+
+      iron_score[idx] = blob_iron * 0.66f + roughness[idx] * 0.16f + terrain_pref_iron + climate_pref_iron;
+      copper_score[idx] = blob_copper * 0.66f + (1.0f - roughness[idx]) * 0.10f + terrain_pref_copper + climate_pref_copper;
+      coal_score[idx] = blob_coal * 0.64f + moisture[idx] * 0.14f + terrain_pref_coal + climate_pref_coal;
     }
   }
 

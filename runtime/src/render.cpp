@@ -270,7 +270,8 @@ void RenderWorld(RuntimeState& state) {
       const int elevation_px = static_cast<int>(tile.height_level) * RuntimeState::kHeightStepPx;
       const int top_cy = base_y - elevation_px;
 
-      const std::uint32_t variant = Hash2D(static_cast<std::uint32_t>(wx), static_cast<std::uint32_t>(wy), state.run_seed) & 0xFFu;
+      const std::uint32_t variant = (Hash2D(static_cast<std::uint32_t>(wx), static_cast<std::uint32_t>(wy), state.run_seed) &
+                                     0xFFu) ^ (static_cast<std::uint32_t>(tile.biome_region) * 47u);
       const auto& terrain_tex = GetTexture(state, TerrainToVisual(tile.terrain), variant);
       const std::uint32_t side_base =
           terrain_tex[static_cast<std::size_t>((AiTextureGenerator::kTextureSize / 2) * AiTextureGenerator::kTextureSize + (AiTextureGenerator::kTextureSize / 2))];
@@ -282,6 +283,10 @@ void RenderWorld(RuntimeState& state) {
       } else if (tile.terrain == TerrainType::Mountain) {
         brightness = 0.92f;
       }
+      if (tile.biome_region == 0) brightness *= 1.04f;
+      if (tile.biome_region == 1) brightness *= 0.97f;
+      if (tile.biome_region == 2) brightness *= 1.01f;
+      if (tile.biome_region == 3) brightness *= 0.95f;
 
       DrawIsoSides(state, base_x, top_cy, elevation_px, side_base);
       DrawIsoTopTextured(state, base_x, top_cy, terrain_tex, brightness);
