@@ -130,7 +130,7 @@ Każdy surowiec musi pozostać czytelny dla gracza (np. żelazo ma dalej wygląd
 
 ## Architektura dokumentacji
 
-Twoja propozycja **pasuje i przyjmujemy ją jako standard**:
+**standard**:
 
 - **Moduł -> dokumentacja modułu**
 - **Skończony moduł -> wpis i aktualizacja w głównym README**
