@@ -133,7 +133,8 @@ struct AiTextureGenerator {
         const float wave = 0.5f + 0.5f * std::sin((xf + latent_b * 8.0f) * 0.8f + (yf + latent_c * 6.0f) * 0.45f);
 
         std::array<float, 3> rgb = base;
-        const float detail = (n - 0.5f) * 0.28f;
+        const float detail_strength = IsTerrainKind(kind) ? 0.12f : 0.28f;
+        const float detail = (n - 0.5f) * detail_strength;
         rgb[0] += detail;
         rgb[1] += detail;
         rgb[2] += detail;
@@ -146,7 +147,12 @@ struct AiTextureGenerator {
     return out;
   }
 
- private:
+  private:
+  static bool IsTerrainKind(VisualKind kind) {
+    return kind == VisualKind::Lowland || kind == VisualKind::Midland || kind == VisualKind::Highland ||
+           kind == VisualKind::Water || kind == VisualKind::Mountain;
+  }
+
   static float Noise(float x, float y, float a, float b, float c) {
     const float n = std::sin((x + a * 41.0f) * 12.9898f + (y + b * 29.0f) * 78.233f + c * 37.719f) * 43758.5453f;
     return n - std::floor(n);
@@ -155,11 +161,11 @@ struct AiTextureGenerator {
   static std::array<float, 3> BaseColor(VisualKind kind, float shift) {
     shift = std::clamp(shift, -0.16f, 0.16f);
     switch (kind) {
-      case VisualKind::Water: return {0.12f + shift * 0.3f, 0.35f, 0.65f + shift * 0.7f};
-      case VisualKind::Mountain: return {0.44f + shift * 0.4f, 0.33f, 0.28f};
-      case VisualKind::Highland: return {0.56f + shift * 0.5f, 0.47f + shift * 0.2f, 0.31f};
-      case VisualKind::Midland: return {0.33f, 0.52f + shift * 0.4f, 0.26f};
-      case VisualKind::Lowland: return {0.23f, 0.44f + shift * 0.5f, 0.21f};
+      case VisualKind::Water: return {0.10f + shift * 0.2f, 0.28f, 0.54f + shift * 0.5f};
+      case VisualKind::Mountain: return {0.41f + shift * 0.2f, 0.36f, 0.30f};
+      case VisualKind::Highland: return {0.50f + shift * 0.2f, 0.43f + shift * 0.1f, 0.31f};
+      case VisualKind::Midland: return {0.38f, 0.44f + shift * 0.2f, 0.29f};
+      case VisualKind::Lowland: return {0.31f, 0.40f + shift * 0.2f, 0.28f};
       case VisualKind::Iron: return {0.61f, 0.63f, 0.67f};
       case VisualKind::Copper: return {0.76f, 0.43f, 0.23f};
       case VisualKind::Coal: return {0.18f, 0.18f, 0.20f};
@@ -225,7 +231,7 @@ struct AiTextureGenerator {
       case VisualKind::Highland:
       case VisualKind::Midland:
       case VisualKind::Lowland: {
-        rgb[1] += wave * 0.06f;
+        rgb[1] += wave * 0.03f;
         break;
       }
       case VisualKind::Player: {

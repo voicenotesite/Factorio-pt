@@ -133,7 +133,7 @@ void DrawMachineGlyph(RuntimeState& state, int cx, int cy) {
 void DrawResourcePatch(RuntimeState& state, ResourceType resource, int cx, int cy, std::uint32_t variant) {
   VisualKind kind = ResourceToVisual(resource);
   const auto& tex = GetTexture(state, kind, variant);
-  const int patch_half = 6;
+  const int patch_half = 5;
   for (int py = -patch_half; py <= patch_half; ++py) {
     const int span = patch_half - std::abs(py);
     for (int px = -span; px <= span; ++px) {
@@ -142,14 +142,14 @@ void DrawResourcePatch(RuntimeState& state, ResourceType resource, int cx, int c
       const int tx = std::clamp(static_cast<int>(u * (AiTextureGenerator::kTextureSize - 1)), 0, AiTextureGenerator::kTextureSize - 1);
       const int ty = std::clamp(static_cast<int>(v * (AiTextureGenerator::kTextureSize - 1)), 0, AiTextureGenerator::kTextureSize - 1);
       const std::uint32_t src = tex[static_cast<std::size_t>(ty * AiTextureGenerator::kTextureSize + tx)];
-      PutPixel(state, cx + px, cy + py - 2, MulColor(src, 1.10f));
+      PutPixel(state, cx + px, cy + py - 2, MulColor(src, 1.04f));
     }
   }
 }
 
 void DrawBiomeProp(RuntimeState& state, const WorldTile& tile, int cx, int cy, std::uint32_t variant) {
   if (tile.resource != ResourceType::None || tile.terrain == TerrainType::Water) return;
-  const bool spawn = ((variant ^ 0x5A) % 17u) == 0u;
+  const bool spawn = ((variant ^ 0x5A) % 31u) == 0u;
   if (!spawn) return;
 
   COLORREF prop = RGB(120, 170, 110);
@@ -356,10 +356,8 @@ void RenderWorld(RuntimeState& state) {
       DrawIsoOutline(state, base_x, top_cy, MulColor(side_base, 0.45f));
 
       if (tile.resource != ResourceType::None && tile.ore_units > 0) {
-        const bool near_player = std::abs(wx - state.player_x) + std::abs(wy - state.player_y) <= 3;
-        const bool machine_here = FindMachineAt(state, wx, wy) != nullptr;
-        const bool sparse_marker = ((wx + wy) % 4) == 0;
-        if (near_player || machine_here || sparse_marker) {
+        const bool marker = ((wx * 3 + wy * 5 + static_cast<int>(variant)) % 3) != 0;
+        if (marker) {
           DrawResourcePatch(state, tile.resource, base_x, top_cy, variant ^ 0x3Du);
         }
       }

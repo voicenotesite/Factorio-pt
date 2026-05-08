@@ -63,6 +63,28 @@ float QuantileThreshold(const std::vector<float>& values, float q) {
 bool IsOreTerrain(TerrainType terrain) {
   return terrain != TerrainType::Water;
 }
+
+int TerrainRank(TerrainType terrain) {
+  switch (terrain) {
+    case TerrainType::Water: return 0;
+    case TerrainType::Lowland: return 1;
+    case TerrainType::Midland: return 2;
+    case TerrainType::Highland: return 3;
+    case TerrainType::Mountain: return 4;
+  }
+  return 1;
+}
+
+TerrainType RankTerrain(int rank) {
+  switch (std::clamp(rank, 0, 4)) {
+    case 0: return TerrainType::Water;
+    case 1: return TerrainType::Lowland;
+    case 2: return TerrainType::Midland;
+    case 3: return TerrainType::Highland;
+    case 4: return TerrainType::Mountain;
+  }
+  return TerrainType::Lowland;
+}
 }  // namespace
 
 std::uint32_t Hash2D(std::uint32_t x, std::uint32_t y, std::uint32_t seed) {
@@ -202,6 +224,9 @@ void GenerateWorld(RuntimeState& state) {
       const float blob_iron = FractalNoise(fx, fy, state.world.seed ^ 0xC11u, 4, 2.1f, 0.52f);
       const float blob_copper = FractalNoise(fx, fy, state.world.seed ^ 0xC22u, 4, 2.1f, 0.52f);
       const float blob_coal = FractalNoise(fx, fy, state.world.seed ^ 0xC33u, 4, 2.1f, 0.52f);
+      const float macro_iron = FractalNoise(fx * 0.36f, fy * 0.36f, state.world.seed ^ 0xD11u, 3, 2.0f, 0.56f);
+      const float macro_copper = FractalNoise(fx * 0.38f, fy * 0.38f, state.world.seed ^ 0xD22u, 3, 2.0f, 0.56f);
+      const float macro_coal = FractalNoise(fx * 0.34f, fy * 0.34f, state.world.seed ^ 0xD33u, 3, 2.0f, 0.56f);
 
       const float climate_pref_iron = (biome_region == 3 ? 0.10f : biome_region == 2 ? 0.06f : 0.02f);
       const float climate_pref_copper = (biome_region == 1 ? 0.10f : biome_region == 0 ? 0.06f : 0.02f);
@@ -211,9 +236,10 @@ void GenerateWorld(RuntimeState& state) {
       const float terrain_pref_copper = (terrain == TerrainType::Highland ? 0.16f : terrain == TerrainType::Midland ? 0.10f : 0.03f);
       const float terrain_pref_coal = (terrain == TerrainType::Midland ? 0.13f : terrain == TerrainType::Lowland ? 0.10f : 0.04f);
 
-      iron_score[idx] = blob_iron * 0.66f + roughness[idx] * 0.16f + terrain_pref_iron + climate_pref_iron;
-      copper_score[idx] = blob_copper * 0.66f + (1.0f - roughness[idx]) * 0.10f + terrain_pref_copper + climate_pref_copper;
-      coal_score[idx] = blob_coal * 0.64f + moisture[idx] * 0.14f + terrain_pref_coal + climate_pref_coal;
+      iron_score[idx] = blob_iron * 0.42f + macro_iron * 0.30f + roughness[idx] * 0.16f + terrain_pref_iron + climate_pref_iron;
+      copper_score[idx] =
+          blob_copper * 0.42f + macro_copper * 0.30f + (1.0f - roughness[idx]) * 0.10f + terrain_pref_copper + climate_pref_copper;
+      coal_score[idx] = blob_coal * 0.40f + macro_coal * 0.30f + moisture[idx] * 0.14f + terrain_pref_coal + climate_pref_coal;
     }
   }
 
@@ -242,6 +268,102 @@ void GenerateWorld(RuntimeState& state) {
   assign_resource(ResourceType::Iron, iron_score, state.world.iron_tiles);
   assign_resource(ResourceType::Copper, copper_score, state.world.copper_tiles);
   assign_resource(ResourceType::Coal, coal_score, state.world.coal_tiles);
+
+  for (int pass = 0; pass < 2; ++pass) {
+    std::vector<TerrainType> next_terrain(static_cast<std::size_t>(total_tiles));
+    for (int y = 0; y < state.world_h; ++y) {
+      for (int x = 0; x < state.world_w; ++x) {
+        const std::size_t idx = TileIndex(state, x, y);
+        int counts[5] = {0, 0, 0, 0, 0};
+        for (int oy = -1; oy <= 1; ++oy) {
+          for (int ox = -1; ox <= 1; ++ox) {
+            const int nx = x + ox;
+            const int ny = y + oy;
+            if (nx < 0 || ny < 0 || nx >= state.world_w || ny >= state.world_h) continue;
+            const auto& neighbor = state.tiles[TileIndex(state, nx, ny)];
+            counts[TerrainRank(neighbor.terrain)]++;
+          }
+        }
+        const int center_rank = TerrainRank(state.tiles[idx].terrain);
+        int best_rank = center_rank;
+        int best_count = counts[center_rank];
+        for (int r = 0; r < 5; ++r) {
+          if (counts[r] > best_count + 2) {
+            best_rank = r;
+            best_count = counts[r];
+          }
+        }
+        next_terrain[idx] = RankTerrain(best_rank);
+      }
+    }
+    for (std::size_t i = 0; i < state.tiles.size(); ++i) {
+      auto& tile = state.tiles[i];
+      tile.terrain = next_terrain[i];
+      switch (tile.terrain) {
+        case TerrainType::Water: tile.height_level = 0; break;
+        case TerrainType::Lowland: tile.height_level = std::min<std::uint8_t>(tile.height_level, 2); break;
+        case TerrainType::Midland: tile.height_level = std::clamp<std::uint8_t>(tile.height_level, 2, 3); break;
+        case TerrainType::Highland: tile.height_level = std::clamp<std::uint8_t>(tile.height_level, 3, 4); break;
+        case TerrainType::Mountain: tile.height_level = std::max<std::uint8_t>(tile.height_level, 4); break;
+      }
+    }
+  }
+
+  for (int pass = 0; pass < 2; ++pass) {
+    std::vector<ResourceType> next_resource(static_cast<std::size_t>(total_tiles), ResourceType::None);
+    std::vector<std::uint16_t> next_units(static_cast<std::size_t>(total_tiles), 0u);
+    for (int y = 0; y < state.world_h; ++y) {
+      for (int x = 0; x < state.world_w; ++x) {
+        const std::size_t idx = TileIndex(state, x, y);
+        const auto& tile = state.tiles[idx];
+        if (!IsOreTerrain(tile.terrain)) continue;
+
+        int iron_n = 0;
+        int copper_n = 0;
+        int coal_n = 0;
+        for (int oy = -1; oy <= 1; ++oy) {
+          for (int ox = -1; ox <= 1; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            const int nx = x + ox;
+            const int ny = y + oy;
+            if (nx < 0 || ny < 0 || nx >= state.world_w || ny >= state.world_h) continue;
+            const auto& n = state.tiles[TileIndex(state, nx, ny)];
+            if (n.resource == ResourceType::Iron) iron_n++;
+            if (n.resource == ResourceType::Copper) copper_n++;
+            if (n.resource == ResourceType::Coal) coal_n++;
+          }
+        }
+
+        ResourceType chosen = tile.resource;
+        int chosen_neighbors = 0;
+        if (chosen == ResourceType::Iron) chosen_neighbors = iron_n;
+        else if (chosen == ResourceType::Copper) chosen_neighbors = copper_n;
+        else if (chosen == ResourceType::Coal) chosen_neighbors = coal_n;
+
+        const std::uint32_t h = Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), state.world.seed ^ 0xA531u);
+        if (chosen == ResourceType::None) {
+          if (iron_n >= 4 || copper_n >= 4 || coal_n >= 4) {
+            if (iron_n >= copper_n && iron_n >= coal_n) chosen = ResourceType::Iron;
+            else if (copper_n >= iron_n && copper_n >= coal_n) chosen = ResourceType::Copper;
+            else chosen = ResourceType::Coal;
+            if ((h & 3u) == 0u) chosen = ResourceType::None;
+          }
+        } else if (chosen_neighbors <= 1 && (h & 1u) == 0u) {
+          chosen = ResourceType::None;
+        }
+
+        next_resource[idx] = chosen;
+        if (chosen != ResourceType::None) {
+          const int base_units = tile.ore_units > 0 ? static_cast<int>(tile.ore_units) : 55;
+          next_units[idx] = static_cast<std::uint16_t>(std::clamp(base_units, 30, 180));
+        }
+      }
+    }
+    for (std::size_t i = 0; i < state.tiles.size(); ++i) {
+      state.tiles[i].resource = next_resource[i];
+      state.tiles[i].ore_units = next_units[i];
+    }
+  }
 
   for (auto& tile : state.tiles) {
     if (tile.resource == ResourceType::None) {
