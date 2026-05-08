@@ -2,3 +2,7 @@ add_executable(factorio_pt_runtime src/main.cpp)
 set_target_properties(factorio_pt_runtime PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 target_compile_definitions(factorio_pt_runtime PRIVATE FACTORIO_PT_APP_NAME="Factorio-pt")
 
+if(WIN32)
+  target_link_libraries(factorio_pt_runtime PRIVATE user32 gdi32)
+endif()
+
