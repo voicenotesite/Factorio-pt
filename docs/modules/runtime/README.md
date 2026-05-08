@@ -32,7 +32,18 @@ Uruchamianie gry, pętla frame, rendering 2.5D, input i streaming danych świata
 - `W/A/S/D` — ruch gracza
 - `I/J/K/L` — kamera
 - `R` — nowy seed stylu świata (wizualny reroll)
+- `E` — ręczne wydobycie
+- `F` — wytop `iron plate`
+- `B` — postaw/usun extractor
 - `Q` / `Esc` — wyjście
+
+## M8 gameplay core (pierwszy etap)
+
+- inwentarz runtime: iron/copper/coal + iron plates,
+- wydobycie ręczne z pola gracza,
+- smelting iron plates,
+- proste maszyny wydobywcze (extractor) działające w czasie,
+- HUD z widokiem zasobów, maszyn i statusu akcji.
 
 ## Build i run
 
@@ -49,5 +60,5 @@ Copy-Item ".\sim-rust\target\x86_64-pc-windows-gnu\debug\factorio_pt_sim.dll" ".
 
 ## Status
 
-**M7 complete** (render i GUI działają; kolejny etap: M8 gameplay layer + sprite atlas)
+**in progress** (M7 complete + M8 gameplay core; kolejny etap: sprite atlas + obiekty produkcyjne)
 

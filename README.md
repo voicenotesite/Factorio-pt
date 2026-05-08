@@ -23,6 +23,16 @@ Mamy działające okno gry z renderingiem pseudo-izometrycznym i AI-like tekstur
 
 **Następny milestone (M8):** gameplay layer (wydobycie/crafting/placement) na obecnym rendererze.
 
+## M8 gameplay layer (w toku)
+
+Do runtime został dodany pierwszy grywalny rdzeń pętli:
+
+- `E` — ręczne wydobycie surowca z pola gracza,
+- `F` — prosty smelting (`2x iron ore + 1x coal -> 1x iron plate`),
+- `B` — postawienie/usunięcie extractora na złożu,
+- extractory wydobywają automatycznie w czasie (tick runtime),
+- HUD pokazuje inwentarz, liczbę maszyn i komunikaty akcji.
+
 ## Struktura repo
 
 ```text

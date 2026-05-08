@@ -65,6 +65,14 @@ struct WorldTile {
   TerrainType terrain;
   ResourceType resource;
   std::uint8_t height_level;
+  std::uint16_t ore_units;
+};
+
+struct Machine {
+  int x;
+  int y;
+  ResourceType resource;
+  float timer_s;
 };
 
 static std::uint32_t Hash2D(std::uint32_t x, std::uint32_t y, std::uint32_t seed) {
@@ -271,8 +279,16 @@ struct RuntimeState {
   PlanetSummary world{};
   SystemSummary system{};
   std::vector<WorldTile> tiles;
+  std::vector<Machine> machines;
   AiTextureGenerator texture_gen;
   std::unordered_map<std::uint32_t, AiTextureGenerator::Texture> texture_cache;
+
+  int inv_iron_ore = 0;
+  int inv_copper_ore = 0;
+  int inv_coal_ore = 0;
+  int inv_iron_plate = 10;
+  std::string status_text = "Ready.";
+  float status_timer_s = 0.0f;
 };
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w_param, LPARAM l_param) {
@@ -334,6 +350,37 @@ VisualKind ResourceToVisual(ResourceType r) {
     case ResourceType::None: break;
   }
   return VisualKind::Lowland;
+}
+
+std::size_t TileIndex(const RuntimeState& state, int x, int y) {
+  return static_cast<std::size_t>(y * state.world_w + x);
+}
+
+WorldTile* GetTile(RuntimeState& state, int x, int y) {
+  if (x < 0 || y < 0 || x >= state.world_w || y >= state.world_h) return nullptr;
+  return &state.tiles[TileIndex(state, x, y)];
+}
+
+const char* ResourceLabel(ResourceType resource) {
+  switch (resource) {
+    case ResourceType::Iron: return "iron";
+    case ResourceType::Copper: return "copper";
+    case ResourceType::Coal: return "coal";
+    case ResourceType::None: break;
+  }
+  return "none";
+}
+
+void SetStatus(RuntimeState& state, const std::string& text, float seconds = 2.5f) {
+  state.status_text = text;
+  state.status_timer_s = seconds;
+}
+
+Machine* FindMachineAt(RuntimeState& state, int x, int y) {
+  for (auto& machine : state.machines) {
+    if (machine.x == x && machine.y == y) return &machine;
+  }
+  return nullptr;
 }
 
 const AiTextureGenerator::Texture& GetTexture(RuntimeState& state, VisualKind kind, std::uint32_t variant_seed) {
@@ -454,8 +501,114 @@ void DrawResourceGlyph(RuntimeState& state, ResourceType resource, int cx, int c
   DeleteObject(pen);
 }
 
+void DrawMachineGlyph(RuntimeState& state, int cx, int cy) {
+  HBRUSH brush = CreateSolidBrush(RGB(245, 198, 95));
+  HPEN pen = CreatePen(PS_SOLID, 1, RGB(30, 24, 20));
+  HGDIOBJ old_brush = SelectObject(state.back_dc, brush);
+  HGDIOBJ old_pen = SelectObject(state.back_dc, pen);
+  Rectangle(state.back_dc, cx - 6, cy - 10, cx + 7, cy + 3);
+  MoveToEx(state.back_dc, cx - 3, cy - 6, nullptr);
+  LineTo(state.back_dc, cx + 4, cy - 6);
+  MoveToEx(state.back_dc, cx, cy - 11, nullptr);
+  LineTo(state.back_dc, cx, cy - 14);
+  SelectObject(state.back_dc, old_pen);
+  SelectObject(state.back_dc, old_brush);
+  DeleteObject(brush);
+  DeleteObject(pen);
+}
+
+void TryMine(RuntimeState& state) {
+  WorldTile* tile = GetTile(state, state.player_x, state.player_y);
+  if (tile == nullptr || tile->resource == ResourceType::None || tile->ore_units == 0) {
+    SetStatus(state, "Brak surowca do wydobycia na tym polu.");
+    return;
+  }
+
+  const int gain = std::min<int>(5, tile->ore_units);
+  if (tile->resource == ResourceType::Iron) state.inv_iron_ore += gain;
+  if (tile->resource == ResourceType::Copper) state.inv_copper_ore += gain;
+  if (tile->resource == ResourceType::Coal) state.inv_coal_ore += gain;
+  tile->ore_units = static_cast<std::uint16_t>(tile->ore_units - gain);
+  const char* name = ResourceLabel(tile->resource);
+  if (tile->ore_units == 0) {
+    tile->resource = ResourceType::None;
+  }
+
+  std::ostringstream ss;
+  ss << "Wydobyto +" << gain << " " << name << ".";
+  SetStatus(state, ss.str(), 2.0f);
+}
+
+void TrySmelt(RuntimeState& state) {
+  if (state.inv_iron_ore < 2 || state.inv_coal_ore < 1) {
+    SetStatus(state, "Za malo surowcow: potrzeba 2x iron ore + 1x coal.");
+    return;
+  }
+  state.inv_iron_ore -= 2;
+  state.inv_coal_ore -= 1;
+  state.inv_iron_plate += 1;
+  SetStatus(state, "Wytopiono +1 iron plate.", 2.0f);
+}
+
+void TryToggleDrill(RuntimeState& state) {
+  Machine* existing = FindMachineAt(state, state.player_x, state.player_y);
+  if (existing != nullptr) {
+    state.machines.erase(std::remove_if(state.machines.begin(), state.machines.end(),
+                                        [&](const Machine& m) { return m.x == state.player_x && m.y == state.player_y; }),
+                         state.machines.end());
+    SetStatus(state, "Usunieto extractor.");
+    return;
+  }
+
+  WorldTile* tile = GetTile(state, state.player_x, state.player_y);
+  if (tile == nullptr || tile->resource == ResourceType::None || tile->ore_units == 0) {
+    SetStatus(state, "Tutaj nie mozna postawic extractora.");
+    return;
+  }
+  if (state.inv_iron_plate < 4) {
+    SetStatus(state, "Za malo iron plate (koszt: 4).");
+    return;
+  }
+
+  state.inv_iron_plate -= 4;
+  state.machines.push_back({state.player_x, state.player_y, tile->resource, 0.0f});
+  std::ostringstream ss;
+  ss << "Postawiono extractor na " << ResourceLabel(tile->resource) << ".";
+  SetStatus(state, ss.str());
+}
+
+void UpdateMachines(RuntimeState& state, float dt) {
+  int produced_iron = 0;
+  int produced_copper = 0;
+  int produced_coal = 0;
+
+  for (auto& machine : state.machines) {
+    machine.timer_s += dt;
+    while (machine.timer_s >= 1.2f) {
+      machine.timer_s -= 1.2f;
+      WorldTile* tile = GetTile(state, machine.x, machine.y);
+      if (tile == nullptr || tile->resource != machine.resource || tile->ore_units == 0) {
+        break;
+      }
+      tile->ore_units = static_cast<std::uint16_t>(tile->ore_units - 1);
+      if (machine.resource == ResourceType::Iron) ++produced_iron;
+      if (machine.resource == ResourceType::Copper) ++produced_copper;
+      if (machine.resource == ResourceType::Coal) ++produced_coal;
+      if (tile->ore_units == 0) {
+        tile->resource = ResourceType::None;
+        break;
+      }
+    }
+  }
+
+  state.inv_iron_ore += produced_iron;
+  state.inv_copper_ore += produced_copper;
+  state.inv_coal_ore += produced_coal;
+}
+
 void GenerateWorld(RuntimeState& state) {
   state.tiles.resize(static_cast<std::size_t>(state.world_w * state.world_h));
+  state.machines.clear();
   const std::uint32_t area = state.world.width * state.world.height;
   const std::uint32_t water_cut = (state.world.water_tiles * 100u) / area;
   const std::uint32_t mountain_cut = ((state.world.water_tiles + state.world.mountain_tiles) * 100u) / area;
@@ -493,7 +646,12 @@ void GenerateWorld(RuntimeState& state) {
         case TerrainType::Mountain: level = static_cast<std::uint8_t>(4 + (hhash % 2u)); break;
       }
 
-      state.tiles[static_cast<std::size_t>(y * state.world_w + x)] = {terrain, resource, level};
+      std::uint16_t ore_units = 0;
+      if (resource != ResourceType::None) {
+        ore_units = static_cast<std::uint16_t>(45u + (Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), state.run_seed ^ 0xC0FFEEu) % 95u));
+      }
+
+      state.tiles[static_cast<std::size_t>(y * state.world_w + x)] = {terrain, resource, level, ore_units};
     }
   }
 }
@@ -571,6 +729,18 @@ void DrawHud(RuntimeState& state) {
   draw_line(econ.str(), RGB(233, 235, 242));
 
   y += 8;
+  draw_line("GAMEPLAY CORE", RGB(255, 219, 148));
+  std::ostringstream inv1;
+  inv1 << "Iron ore: " << state.inv_iron_ore << "   Copper ore: " << state.inv_copper_ore;
+  draw_line(inv1.str(), RGB(225, 231, 244));
+  std::ostringstream inv2;
+  inv2 << "Coal: " << state.inv_coal_ore << "   Iron plate: " << state.inv_iron_plate;
+  draw_line(inv2.str(), RGB(225, 231, 244));
+  std::ostringstream mach;
+  mach << "Extractors: " << state.machines.size();
+  draw_line(mach.str(), RGB(225, 231, 244));
+
+  y += 8;
   draw_line("RESOURCE READABILITY", RGB(255, 219, 148));
   draw_line("Iron: bright-cold veins", RGB(203, 210, 225));
   draw_line("Copper: warm oxidized nodes", RGB(220, 162, 112));
@@ -579,8 +749,16 @@ void DrawHud(RuntimeState& state) {
   y += 8;
   draw_line("CONTROLS", RGB(154, 225, 255));
   draw_line("WASD = move  |  IJKL = pan", RGB(233, 235, 242));
+  draw_line("E = mine  |  F = smelt plate", RGB(233, 235, 242));
+  draw_line("B = place/remove extractor", RGB(233, 235, 242));
   draw_line("R = new world style seed", RGB(233, 235, 242));
   draw_line("ESC / Q = quit", RGB(233, 235, 242));
+
+  if (!state.status_text.empty()) {
+    y += 10;
+    draw_line("STATUS", RGB(255, 219, 148));
+    draw_line(state.status_text, RGB(247, 236, 188));
+  }
 }
 
 void DrawSkyGradient(RuntimeState& state) {
@@ -635,6 +813,9 @@ void RenderWorld(RuntimeState& state) {
       DrawIsoTopTextured(state, base_x, top_cy, tex, brightness);
       DrawIsoOutline(state, base_x, top_cy, MulColor(side_base, 0.45f));
       DrawResourceGlyph(state, tile.resource, base_x, top_cy);
+      if (FindMachineAt(state, wx, wy) != nullptr) {
+        DrawMachineGlyph(state, base_x, top_cy);
+      }
 
       if (wx == state.player_x && wy == state.player_y) {
         DrawIsoOutline(state, base_x, top_cy - 1, PackColor(255, 255, 255));
@@ -691,7 +872,7 @@ void ReseedWorldStyle(RuntimeState& state) {
   state.run_seed ^= 0x9E3779B9u + state.frame_counter;
   state.theme_shift = static_cast<float>((state.run_seed & 0x7Fu)) / 127.0f * 0.32f - 0.16f;
   state.texture_cache.clear();
-  GenerateWorld(state);
+  SetStatus(state, "Zmieniono styl wizualny swiata (seed).", 1.8f);
 }
 
 int RunRuntimeWindow(SimTickFn sim_tick,
@@ -757,7 +938,7 @@ int RunRuntimeWindow(SimTickFn sim_tick,
 
   bool prev_w = false, prev_a = false, prev_s = false, prev_d = false;
   bool prev_i = false, prev_j = false, prev_k = false, prev_l = false;
-  bool prev_q = false, prev_r = false;
+  bool prev_q = false, prev_r = false, prev_e = false, prev_f = false, prev_b = false;
 
   auto frame_begin = std::chrono::high_resolution_clock::now();
   auto fps_window_start = frame_begin;
@@ -786,6 +967,9 @@ int RunRuntimeWindow(SimTickFn sim_tick,
     if (KeyEdge('K', prev_k)) state.camera_y++;
     if (KeyEdge('J', prev_j)) state.camera_x--;
     if (KeyEdge('L', prev_l)) state.camera_x++;
+    if (KeyEdge('E', prev_e)) TryMine(state);
+    if (KeyEdge('F', prev_f)) TrySmelt(state);
+    if (KeyEdge('B', prev_b)) TryToggleDrill(state);
     if (KeyEdge('R', prev_r)) ReseedWorldStyle(state);
     if (KeyEdge('Q', prev_q) || (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) state.running = false;
 
@@ -794,7 +978,15 @@ int RunRuntimeWindow(SimTickFn sim_tick,
     state.camera_x = std::clamp(state.camera_x, 0, std::max(0, state.world_w - state.viewport_tiles_w));
     state.camera_y = std::clamp(state.camera_y, 0, std::max(0, state.world_h - state.viewport_tiles_h));
 
-    state.snapshot = sim_tick(1.0f / 60.0f);
+    constexpr float sim_dt = 1.0f / 60.0f;
+    state.snapshot = sim_tick(sim_dt);
+    UpdateMachines(state, sim_dt);
+    if (state.status_timer_s > 0.0f) {
+      state.status_timer_s = std::max(0.0f, state.status_timer_s - sim_dt);
+      if (state.status_timer_s <= 0.0f) {
+        state.status_text.clear();
+      }
+    }
     state.water_anim += 0.07f;
     Render(state);
 
