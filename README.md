@@ -11,18 +11,15 @@ Projekt gry typu automation/strategy w klimacie Factorio, rozszerzony o polityk�
 
 ## Aktualny kamień milowy
 
-**M6: system generator bootstrap (zakończony)**  
-Utworzono bazę techniczną i pierwszy krok gameplay loop:
+**M7: runtime visual pass (w toku)**  
+Mamy działające okno gry z renderingiem pseudo-izometrycznym i AI-like teksturami:
 
-- C++ runtime (`runtime/`)
-- Rust simulation crate (`sim-rust/`)
-- C# tools app (`tools-csharp/`)
-- wspólny skrypt build (`scripts/build.ps1`)
-- integracja C++ <-> Rust (`sim_bootstrap`)
-- tick symulacji w Rust (`sim_tick`) i odczyt stanu na żywo w runtime
-- decyzje polityczne MVP: `sim_set_policy(wage, tax)` wpływające na stabilność i zanieczyszczenie
-- generator planety (`sim_generate_planet`) z profilem wysokości pod 2.5D i podstawowymi zasobami
-- generator układu (`sim_generate_system`) dla 10 planet core oraz wariantów planet (`sim_generate_planet_from_core`)
+- C++ runtime (`runtime/`) z pętlą ~60 FPS,
+- pseudo-izometryczny render świata (height levels + side shading),
+- AI-like generator tekstur materiałowych (deterministyczny per seed uruchomienia),
+- wyraźne sygnatury surowców (iron/copper/coal),
+- HUD runtime (metryki symulacji, kontrolki, status),
+- integracja C++ <-> Rust (`sim_bootstrap`, `sim_tick`, `sim_set_policy`, `sim_generate_planet`, `sim_generate_system`).
 
 ## Struktura repo
 
@@ -56,6 +53,25 @@ Skrypt buduje tylko runtime + bibliotekę symulacji Rust i tworzy paczkę:
 
 - `dist\runtime-win64\` (pliki do uruchomienia),
 - `dist\factorio-pt-runtime-win64.zip` (artefakt pod GitHub Release).
+
+## Runtime visual pass (M7)
+
+Co jest już zaimplementowane:
+
+- render pseudo-2.5D (izometryczna kompozycja kafli),
+- wysokości terenu (ekstruzja i cieniowanie boków),
+- animacja wody i mgła zanieczyszczeń zależna od `pollution`,
+- generator stylu świata per run (`R` = nowy seed stylu),
+- HUD z paskami metryk (`stability`, `pollution`, `wage`, `tax`),
+- płynne sterowanie i kamera (`WASD` + `IJKL`).
+
+Szybkie uruchomienie:
+
+```powershell
+.\scripts\build.ps1 -Configuration Debug
+Copy-Item ".\sim-rust\target\x86_64-pc-windows-gnu\debug\factorio_pt_sim.dll" ".\build\runtime\" -Force
+.\build\runtime\factorio_pt_runtime.exe
+```
 
 ## MVP (v0.1)
 
