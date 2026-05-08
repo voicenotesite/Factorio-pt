@@ -260,13 +260,23 @@ void DrawHud(RuntimeState& state) {
   draw_line(mach.str(), RGB(225, 231, 244));
 
   y += 8;
-  draw_line("OBJECTIVES", RGB(255, 219, 148));
-  auto obj_line = [&](const std::string& text, bool done) {
-    draw_line(std::string(done ? "[x] " : "[ ] ") + text, done ? RGB(149, 220, 143) : RGB(219, 225, 238), 20);
-  };
-  obj_line("Mine 50 ore", state.mined_total >= 50);
-  obj_line("Smelt 12 plates", state.smelted_total >= 12);
-  obj_line("Build 3 extractors", state.extractors_built_total >= 3);
+  draw_line("ITEM-BASED TECH TREE", RGB(255, 219, 148));
+  for (const auto& tech : state.tech_tree) {
+    std::ostringstream req;
+    req << (tech.unlocked ? "[x] " : "[ ] ") << tech.name;
+    draw_line(req.str(), tech.unlocked ? RGB(149, 220, 143) : RGB(219, 225, 238), 20);
+
+    std::ostringstream progress;
+    progress << "  req: Fe " << std::min(state.total_iron_ore_collected, tech.req_iron_ore) << "/" << tech.req_iron_ore
+             << " Cu " << std::min(state.total_copper_ore_collected, tech.req_copper_ore) << "/" << tech.req_copper_ore
+             << " C " << std::min(state.total_coal_ore_collected, tech.req_coal_ore) << "/" << tech.req_coal_ore
+             << " Pl " << std::min(state.total_iron_plate_produced, tech.req_iron_plate) << "/" << tech.req_iron_plate;
+    draw_line(progress.str(), RGB(182, 191, 210), 18);
+
+    if (tech.unlocked) {
+      draw_line("  bonus: " + tech.bonus_text, RGB(140, 216, 157), 18);
+    }
+  }
 
   y += 8;
   draw_line("CONTROLS", RGB(154, 225, 255));

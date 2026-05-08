@@ -89,6 +89,8 @@ int RunRuntimeWindow(SimTickFn sim_tick,
   sim_set_policy(0.60f, 0.28f);
   state.snapshot = sim_tick(0.0f);
   GenerateWorld(state);
+  InitializeTechnology(state);
+  UpdateTechnologyUnlocks(state);
 
   bool prev_w = false, prev_a = false, prev_s = false, prev_d = false;
   bool prev_i = false, prev_j = false, prev_k = false, prev_l = false;
@@ -134,6 +136,7 @@ int RunRuntimeWindow(SimTickFn sim_tick,
     constexpr float sim_dt = 1.0f / 60.0f;
     state.snapshot = sim_tick(sim_dt);
     UpdateMachines(state, sim_dt);
+    UpdateTechnologyUnlocks(state);
     state.day_time_s += sim_dt;
     if (state.status_timer_s > 0.0f) {
       state.status_timer_s = std::max(0.0f, state.status_timer_s - sim_dt);

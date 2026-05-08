@@ -78,6 +78,17 @@ struct Machine {
   float timer_s;
 };
 
+struct TechnologyNode {
+  std::string id;
+  std::string name;
+  int req_iron_ore = 0;
+  int req_copper_ore = 0;
+  int req_coal_ore = 0;
+  int req_iron_plate = 0;
+  bool unlocked = false;
+  std::string bonus_text;
+};
+
 inline std::uint32_t PackColor(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
   return static_cast<std::uint32_t>(r) | (static_cast<std::uint32_t>(g) << 8u) | (static_cast<std::uint32_t>(b) << 16u);
 }
@@ -276,6 +287,16 @@ struct RuntimeState {
   int inv_copper_ore = 0;
   int inv_coal_ore = 0;
   int inv_iron_plate = 10;
+  int total_iron_ore_collected = 0;
+  int total_copper_ore_collected = 0;
+  int total_coal_ore_collected = 0;
+  int total_iron_plate_produced = 0;
+
+  std::vector<TechnologyNode> tech_tree;
+  float extractor_speed_multiplier = 1.0f;
+  int manual_mine_bonus = 0;
+  int smelt_plate_bonus = 0;
+
   int mined_total = 0;
   int smelted_total = 0;
   int extractors_built_total = 0;
