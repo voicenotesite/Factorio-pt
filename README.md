@@ -11,7 +11,7 @@ Projekt gry typu automation/strategy w klimacie Factorio, rozszerzony o polityk�
 
 ## Aktualny kamień milowy
 
-**M7: runtime visual pass (w toku)**  
+**M7: runtime visual pass (zakończony)**  
 Mamy działające okno gry z renderingiem pseudo-izometrycznym i AI-like teksturami:
 
 - C++ runtime (`runtime/`) z pętlą ~60 FPS,
@@ -20,6 +20,8 @@ Mamy działające okno gry z renderingiem pseudo-izometrycznym i AI-like tekstur
 - wyraźne sygnatury surowców (iron/copper/coal),
 - HUD runtime (metryki symulacji, kontrolki, status),
 - integracja C++ <-> Rust (`sim_bootstrap`, `sim_tick`, `sim_set_policy`, `sim_generate_planet`, `sim_generate_system`).
+
+**Następny milestone (M8):** gameplay layer (wydobycie/crafting/placement) na obecnym rendererze.
 
 ## Struktura repo
 

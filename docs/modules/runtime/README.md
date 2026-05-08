@@ -49,5 +49,5 @@ Copy-Item ".\sim-rust\target\x86_64-pc-windows-gnu\debug\factorio_pt_sim.dll" ".
 
 ## Status
 
-**in progress** (render i GUI działają; kolejne kroki: renderer sprite atlas + obiekty gameplay)
+**M7 complete** (render i GUI działają; kolejny etap: M8 gameplay layer + sprite atlas)
 
