@@ -44,6 +44,19 @@ PowerShell:
 
 Skrypt używa toolchainu MinGW/Ninja (`C:\msys64\ucrt64\bin`) oraz Rust target `x86_64-pc-windows-gnu`.
 
+## Runtime release (Windows)
+
+PowerShell:
+
+```powershell
+.\scripts\package-runtime-release.ps1
+```
+
+Skrypt buduje tylko runtime + bibliotekę symulacji Rust i tworzy paczkę:
+
+- `dist\runtime-win64\` (pliki do uruchomienia),
+- `dist\factorio-pt-runtime-win64.zip` (artefakt pod GitHub Release).
+
 ## MVP (v0.1)
 
 1. 1 układ planetarny.

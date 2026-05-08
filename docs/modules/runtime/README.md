@@ -17,5 +17,5 @@ Uruchamianie gry, pętla frame, rendering 2.5D, input i streaming danych świata
 
 ## Status
 
-**planned**
+**in progress** (runtime gry działa lokalnie; przygotowany pipeline paczkowania release)
 
