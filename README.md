@@ -32,6 +32,8 @@ Do runtime został dodany pierwszy grywalny rdzeń pętli:
 - `B` — postawienie/usunięcie extractora na złożu,
 - extractory wydobywają automatycznie w czasie (tick runtime),
 - HUD pokazuje inwentarz, liczbę maszyn i komunikaty akcji.
+- runtime został podzielony na moduły (`world`, `gameplay`, `render`, `runtime_state`) dla porządku kodu.
+- render mapy został uspokojony: terrain-first + kontekstowe patche surowców (mniej chaosu wizualnego).
 
 ## Struktura repo
 

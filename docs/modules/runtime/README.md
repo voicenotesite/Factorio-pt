@@ -45,6 +45,24 @@ Uruchamianie gry, pętla frame, rendering 2.5D, input i streaming danych świata
 - proste maszyny wydobywcze (extractor) działające w czasie,
 - HUD z widokiem zasobów, maszyn i statusu akcji.
 
+## Refactor kodu (anti-chaos)
+
+Runtime został podzielony na moduły:
+
+- `runtime_state.h` — wspólny stan i typy runtime,
+- `world.*` — generacja świata, tile access, status i seed stylu,
+- `gameplay.*` — akcje gracza i logika maszyn,
+- `render.*` — rendering mapy/HUD i obsługa backbuffera,
+- `main.cpp` — bootstrap DLL + pętla aplikacji.
+
+Dzięki temu kolejne iteracje M8/M9 są prostsze i mniej ryzykowne.
+
+## Czytelniejsza mapa
+
+- render jest teraz **terrain-first** (biom najpierw, surowiec jako patch),
+- znaczniki surowców są rzadsze i kontekstowe (blisko gracza/maszyn),
+- efekt: mapa jest spokojniejsza wizualnie i łatwiejsza do czytania.
+
 ## Build i run
 
 ```powershell
