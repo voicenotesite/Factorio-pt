@@ -1,0 +1,15 @@
+# Orbitum — SD texture generator dependencies
+# Install with: pip install -r tools-python/requirements.txt
+#
+# Requires CUDA toolkit matching your driver version:
+#   https://developer.nvidia.com/cuda-downloads
+# Then install PyTorch with CUDA support first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+torch>=2.1.0
+torchvision>=0.16.0
+diffusers>=0.27.0
+transformers>=4.38.0
+accelerate>=0.27.0
+safetensors>=0.4.2
+Pillow>=10.0.0
