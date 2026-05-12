@@ -10,11 +10,18 @@ Uruchamianie gry, pętla frame, rendering 2.5D, input i streaming danych świata
 - podpięcie danych symulacji,
 - fundament pod 60 FPS.
 
-## Aktualna implementacja (M7 visual pass)
+## Aktualna implementacja (M8/M9 gameplay + factorio-like pass)
 
 - okno Win32 + software rendering (GDI + backbuffer DIB),
-- pseudo-izometryczny świat (tile projection, wysokości, side shading),
+- top-down grid (Factorio-like), kafle kwadratowe + proste nakładki (belty/items),
+- duży pass grafiki/FPS:
+  - adaptacyjna jakość renderu (HIGH/BALANCED/PERF-CRITICAL) zależna od FPS,
+  - szybsze prymitywy pikselowe (clipped fill dla prostokątów/okręgów, mniej kosztownego `PutPixel`),
+  - bardziej organiczne patch'e rud (maska radialna + noise),
+  - mocniejsze odszumienie siatki kafli (flip/offset/transpose tekstur + blend narożników),
+  - tańsze shoreline i tańszy haze przy niskim FPS (checkerboard w trybie krytycznym),
 - AI-like generator tekstur materiałowych oparty o latent seed,
+- opcjonalny loader zewnętrznego atlasu tekstur (`assets/generated/runtime_texture_atlas.bin`),
 - cache tekstur per `VisualKind` + wariant,
 - sygnatury rozpoznawalności surowców:
   - iron: chłodne żyły,
@@ -29,12 +36,21 @@ Uruchamianie gry, pętla frame, rendering 2.5D, input i streaming danych świata
 
 ## Sterowanie
 
-- `W/A/S/D` — ruch gracza
-- `I/J/K/L` — kamera
-- `R` — nowy seed stylu świata (wizualny reroll)
+- `W/A/S/D` — płynny ruch gracza
+- `Shift` — sprint
+- kamera płynnie podąża za graczem (smooth follow)
 - `E` — ręczne wydobycie
 - `F` — wytop `iron plate`
 - `B` — postaw/usun extractor
+- `N` — postaw/usun furnace
+- `T` — postaw/usun belt
+- `C` — zetnij drzewo (wood)
+- `R` — obrót kierunku budowy (belty/wyjścia maszyn)
+- `P` — nowy seed stylu świata (wizualny reroll)
+- `H` — przełącz HUD (hidden/compact/debug)
+- `F7` — auto governor jakości/FPS (ON/OFF)
+- `F8` — render resolution: fixed (szybciej) ↔ native (ostrzej, wolniej)
+- HUD pokazuje aktualny profil jakości renderu: `HIGH`, `BALANCED` lub `PERF-CRITICAL`
 - `Q` / `Esc` — wyjście
 
 ## M8 gameplay core (pierwszy etap)
@@ -57,17 +73,51 @@ Runtime został podzielony na moduły:
 
 Dzięki temu kolejne iteracje M8/M9 są prostsze i mniej ryzykowne.
 
-## Czytelniejsza mapa
+## Czytelniejsza mapa i factorio-like look
 
 - render jest teraz **terrain-first** (biom najpierw, surowiec jako patch),
-- znaczniki surowców są rzadsze i kontekstowe (blisko gracza/maszyn),
-- efekt: mapa jest spokojniejsza wizualnie i łatwiejsza do czytania.
+- mapa jest bardziej płaska (2.5D), z okazjonalnymi górami,
+- surowce tworzą bardziej spójne klastry i są czytelniejsze.
+
+## Pipeline tekstur z datasetu referencyjnego
+
+Runtime wspiera dwa tryby:
+
+1. **Procedural fallback** (bez plików wejściowych) — obecny generator C++.
+2. **External atlas mode** — atlas wygenerowany skryptem Python i ładowany automatycznie przy starcie.
+
+Przygotowanie atlasu (osobny trainer AI):
+
+```powershell
+dotnet run --project .\tools-csharp\ai-trainer\FactorioPt.AiTrainer.csproj -- `
+  --dataset-root .\assets\style-dataset `
+  --output .\assets\generated\runtime_texture_atlas.bin `
+  --variants 8
+```
+
+Generowanie **seamless HQ tiles** (32/64, teren + rudy):
+
+```powershell
+dotnet run --project .\tools-csharp\ai-trainer\FactorioPt.AiTrainer.csproj -- `
+  --export-hq-tiles .\assets\generated\hq-tiles `
+  --tile-sizes 64 `
+  --tile-variants 12 `
+  --style-shots-dir .\ `
+  --style-blend 0.32 `
+  --seed 20260508
+```
+
+Uruchomienie:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-runtime-release.ps1
+.\dist\runtime-win64\factorio_pt_runtime.exe
+```
 
 ## Build i run
 
 ```powershell
 .\scripts\build.ps1 -Configuration Debug
-Copy-Item ".\sim-rust\target\x86_64-pc-windows-gnu\debug\factorio_pt_sim.dll" ".\build\runtime\" -Force
 .\build\runtime\factorio_pt_runtime.exe
 ```
 

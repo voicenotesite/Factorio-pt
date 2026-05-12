@@ -5,5 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- tools-csharp hosts multiple tools; keep AiTrainer as a separate project. -->
+  <ItemGroup>
+    <Compile Remove="ai-trainer\**\*.cs" />
+    <EmbeddedResource Remove="ai-trainer\**\*" />
+    <None Remove="ai-trainer\**\*" />
+  </ItemGroup>
 </Project>
 

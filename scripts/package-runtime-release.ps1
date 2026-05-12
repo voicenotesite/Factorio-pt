@@ -52,6 +52,13 @@ if (!(Test-Path $simDll)) {
 Copy-Item $runtimeExe $packageDir -Force
 Copy-Item $simDll $packageDir -Force
 
+$atlasPath = Join-Path $repoRoot "assets\generated\runtime_texture_atlas.bin"
+if (Test-Path $atlasPath) {
+  $atlasOutDir = Join-Path $packageDir "assets\generated"
+  New-Item -ItemType Directory -Path $atlasOutDir -Force | Out-Null
+  Copy-Item $atlasPath (Join-Path $atlasOutDir "runtime_texture_atlas.bin") -Force
+}
+
 $runtimeDeps = @(
   "C:\msys64\ucrt64\bin\libstdc++-6.dll",
   "C:\msys64\ucrt64\bin\libwinpthread-1.dll",

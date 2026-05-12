@@ -23,13 +23,23 @@ cmake --build .\build
 
 Write-Host "==> Building Rust simulation"
 $cargoArgs = @("build", "--manifest-path", ".\sim-rust\Cargo.toml", "--target", $rustTarget)
+$rustProfileDir = "debug"
 if ($Configuration -eq "Release") {
   $cargoArgs += "--release"
+  $rustProfileDir = "release"
 }
 & $cargoExe @cargoArgs
 
+# Copy sim DLL next to the runtime EXE so you can run immediately.
+$simDll = ".\sim-rust\target\$rustTarget\$rustProfileDir\factorio_pt_sim.dll"
+$runtimeOutDir = ".\build\runtime"
+if (Test-Path $simDll) {
+  Copy-Item $simDll $runtimeOutDir -Force
+}
+
 Write-Host "==> Building C# tools"
 & $dotnetExe build .\tools-csharp\FactorioPt.Tools.csproj -c $Configuration
+& $dotnetExe build .\tools-csharp\ai-trainer\FactorioPt.AiTrainer.csproj -c $Configuration
 
 Write-Host "Build completed."
 

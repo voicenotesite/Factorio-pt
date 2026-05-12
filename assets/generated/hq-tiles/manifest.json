@@ -1,0 +1,164 @@
+{
+  "generator": "tools-csharp/ai-trainer (HQ mode)",
+  "styles": "top-down orthographic, seamless, no directional shadows",
+  "sizes": [
+    32,
+    64
+  ],
+  "variants": 8,
+  "kinds": [
+    "dirt",
+    "grass",
+    "sand",
+    "rocky",
+    "iron",
+    "copper",
+    "coal"
+  ],
+  "files": {
+    "32": {
+      "dirt": [
+        "32/dirt/dirt_v01_32.png",
+        "32/dirt/dirt_v02_32.png",
+        "32/dirt/dirt_v03_32.png",
+        "32/dirt/dirt_v04_32.png",
+        "32/dirt/dirt_v05_32.png",
+        "32/dirt/dirt_v06_32.png",
+        "32/dirt/dirt_v07_32.png",
+        "32/dirt/dirt_v08_32.png"
+      ],
+      "grass": [
+        "32/grass/grass_v01_32.png",
+        "32/grass/grass_v02_32.png",
+        "32/grass/grass_v03_32.png",
+        "32/grass/grass_v04_32.png",
+        "32/grass/grass_v05_32.png",
+        "32/grass/grass_v06_32.png",
+        "32/grass/grass_v07_32.png",
+        "32/grass/grass_v08_32.png"
+      ],
+      "sand": [
+        "32/sand/sand_v01_32.png",
+        "32/sand/sand_v02_32.png",
+        "32/sand/sand_v03_32.png",
+        "32/sand/sand_v04_32.png",
+        "32/sand/sand_v05_32.png",
+        "32/sand/sand_v06_32.png",
+        "32/sand/sand_v07_32.png",
+        "32/sand/sand_v08_32.png"
+      ],
+      "rocky": [
+        "32/rocky/rocky_v01_32.png",
+        "32/rocky/rocky_v02_32.png",
+        "32/rocky/rocky_v03_32.png",
+        "32/rocky/rocky_v04_32.png",
+        "32/rocky/rocky_v05_32.png",
+        "32/rocky/rocky_v06_32.png",
+        "32/rocky/rocky_v07_32.png",
+        "32/rocky/rocky_v08_32.png"
+      ],
+      "iron": [
+        "32/iron/iron_v01_32.png",
+        "32/iron/iron_v02_32.png",
+        "32/iron/iron_v03_32.png",
+        "32/iron/iron_v04_32.png",
+        "32/iron/iron_v05_32.png",
+        "32/iron/iron_v06_32.png",
+        "32/iron/iron_v07_32.png",
+        "32/iron/iron_v08_32.png"
+      ],
+      "copper": [
+        "32/copper/copper_v01_32.png",
+        "32/copper/copper_v02_32.png",
+        "32/copper/copper_v03_32.png",
+        "32/copper/copper_v04_32.png",
+        "32/copper/copper_v05_32.png",
+        "32/copper/copper_v06_32.png",
+        "32/copper/copper_v07_32.png",
+        "32/copper/copper_v08_32.png"
+      ],
+      "coal": [
+        "32/coal/coal_v01_32.png",
+        "32/coal/coal_v02_32.png",
+        "32/coal/coal_v03_32.png",
+        "32/coal/coal_v04_32.png",
+        "32/coal/coal_v05_32.png",
+        "32/coal/coal_v06_32.png",
+        "32/coal/coal_v07_32.png",
+        "32/coal/coal_v08_32.png"
+      ]
+    },
+    "64": {
+      "dirt": [
+        "64/dirt/dirt_v01_64.png",
+        "64/dirt/dirt_v02_64.png",
+        "64/dirt/dirt_v03_64.png",
+        "64/dirt/dirt_v04_64.png",
+        "64/dirt/dirt_v05_64.png",
+        "64/dirt/dirt_v06_64.png",
+        "64/dirt/dirt_v07_64.png",
+        "64/dirt/dirt_v08_64.png"
+      ],
+      "grass": [
+        "64/grass/grass_v01_64.png",
+        "64/grass/grass_v02_64.png",
+        "64/grass/grass_v03_64.png",
+        "64/grass/grass_v04_64.png",
+        "64/grass/grass_v05_64.png",
+        "64/grass/grass_v06_64.png",
+        "64/grass/grass_v07_64.png",
+        "64/grass/grass_v08_64.png"
+      ],
+      "sand": [
+        "64/sand/sand_v01_64.png",
+        "64/sand/sand_v02_64.png",
+        "64/sand/sand_v03_64.png",
+        "64/sand/sand_v04_64.png",
+        "64/sand/sand_v05_64.png",
+        "64/sand/sand_v06_64.png",
+        "64/sand/sand_v07_64.png",
+        "64/sand/sand_v08_64.png"
+      ],
+      "rocky": [
+        "64/rocky/rocky_v01_64.png",
+        "64/rocky/rocky_v02_64.png",
+        "64/rocky/rocky_v03_64.png",
+        "64/rocky/rocky_v04_64.png",
+        "64/rocky/rocky_v05_64.png",
+        "64/rocky/rocky_v06_64.png",
+        "64/rocky/rocky_v07_64.png",
+        "64/rocky/rocky_v08_64.png"
+      ],
+      "iron": [
+        "64/iron/iron_v01_64.png",
+        "64/iron/iron_v02_64.png",
+        "64/iron/iron_v03_64.png",
+        "64/iron/iron_v04_64.png",
+        "64/iron/iron_v05_64.png",
+        "64/iron/iron_v06_64.png",
+        "64/iron/iron_v07_64.png",
+        "64/iron/iron_v08_64.png"
+      ],
+      "copper": [
+        "64/copper/copper_v01_64.png",
+        "64/copper/copper_v02_64.png",
+        "64/copper/copper_v03_64.png",
+        "64/copper/copper_v04_64.png",
+        "64/copper/copper_v05_64.png",
+        "64/copper/copper_v06_64.png",
+        "64/copper/copper_v07_64.png",
+        "64/copper/copper_v08_64.png"
+      ],
+      "coal": [
+        "64/coal/coal_v01_64.png",
+        "64/coal/coal_v02_64.png",
+        "64/coal/coal_v03_64.png",
+        "64/coal/coal_v04_64.png",
+        "64/coal/coal_v05_64.png",
+        "64/coal/coal_v06_64.png",
+        "64/coal/coal_v07_64.png",
+        "64/coal/coal_v08_64.png"
+      ]
+    }
+  }
+}

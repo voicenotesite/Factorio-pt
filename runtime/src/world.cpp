@@ -129,254 +129,339 @@ void SetStatus(RuntimeState& state, const std::string& text, float seconds) {
 void GenerateWorld(RuntimeState& state) {
   state.tiles.resize(static_cast<std::size_t>(state.world_w * state.world_h));
   state.machines.clear();
+  state.items.clear();
 
-  const int total_tiles = state.world_w * state.world_h;
-  const float inv_total = total_tiles > 0 ? 1.0f / static_cast<float>(total_tiles) : 0.0f;
-  const float water_ratio = static_cast<float>(state.world.water_tiles) * inv_total;
-  const float mountain_ratio = static_cast<float>(state.world.mountain_tiles) * inv_total;
-  const float high_ratio = static_cast<float>(state.world.highland_tiles) * inv_total;
-  const float mid_ratio = static_cast<float>(state.world.midland_tiles) * inv_total;
-  const float low_ratio = static_cast<float>(state.world.lowland_tiles) * inv_total;
+  {
+    const int world_w = state.world_w;
+    const int world_h = state.world_h;
+    const int world_tile_count = world_w * world_h;
+    const int region_size = 32;
+    const int regions_x = (world_w + region_size - 1) / region_size;
+    const int regions_y = (world_h + region_size - 1) / region_size;
 
-  std::vector<float> elevation(static_cast<std::size_t>(total_tiles), 0.0f);
-  std::vector<float> roughness(static_cast<std::size_t>(total_tiles), 0.0f);
-  std::vector<float> moisture(static_cast<std::size_t>(total_tiles), 0.0f);
-  std::vector<float> climate(static_cast<std::size_t>(total_tiles), 0.0f);
-  std::vector<float> heat(static_cast<std::size_t>(total_tiles), 0.0f);
-
-  const float base_scale = 0.028f;
-  const float warp_scale = 0.014f;
-  for (int y = 0; y < state.world_h; ++y) {
-    for (int x = 0; x < state.world_w; ++x) {
-      const std::size_t idx = TileIndex(state, x, y);
-      const float fx = static_cast<float>(x);
-      const float fy = static_cast<float>(y);
-
-      const float warp_x = (ValueNoise(fx * warp_scale, fy * warp_scale, state.world.seed ^ 0x77A11u) - 0.5f) * 12.0f;
-      const float warp_y = (ValueNoise(fx * warp_scale, fy * warp_scale, state.world.seed ^ 0x99B22u) - 0.5f) * 12.0f;
-      const float nx = (fx + warp_x) * base_scale;
-      const float ny = (fy + warp_y) * base_scale;
-
-      const float continental = FractalNoise(nx * 0.7f, ny * 0.7f, state.world.seed ^ 0x1000u, 5, 2.0f, 0.5f);
-      const float detail = FractalNoise(nx * 2.0f, ny * 2.0f, state.world.seed ^ 0x2000u, 4, 2.1f, 0.55f);
-      const float ridge = std::abs(FractalNoise(nx * 1.4f, ny * 1.4f, state.world.seed ^ 0x3000u, 3, 2.0f, 0.5f) * 2.0f - 1.0f);
-      const float climate_field = FractalNoise(nx * 0.35f, ny * 0.35f, state.world.seed ^ 0x6111u, 4, 2.0f, 0.55f);
-      const float heat_field = FractalNoise(nx * 0.42f + 11.0f, ny * 0.42f + 29.0f, state.world.seed ^ 0x6222u, 4, 2.0f, 0.55f);
-      climate[idx] = climate_field;
-      heat[idx] = heat_field;
-
-      const float regional_bias = (climate_field - 0.5f) * 0.16f + (heat_field - 0.5f) * 0.08f;
-      elevation[idx] = std::clamp(continental * 0.60f + detail * 0.20f + (1.0f - ridge) * 0.15f + regional_bias, 0.0f, 1.0f);
-
-      roughness[idx] = FractalNoise(nx * 3.2f, ny * 3.2f, state.world.seed ^ 0x4000u, 3, 2.0f, 0.5f);
-      moisture[idx] = std::clamp(FractalNoise(nx * 1.5f, ny * 1.5f, state.world.seed ^ 0x5000u, 4, 2.0f, 0.55f) * 0.75f +
-                                     climate_field * 0.25f,
-                                 0.0f,
-                                 1.0f);
-    }
-  }
-
-  const float water_t = QuantileThreshold(elevation, water_ratio);
-  const float low_t = QuantileThreshold(elevation, water_ratio + low_ratio);
-  const float mid_t = QuantileThreshold(elevation, water_ratio + low_ratio + mid_ratio);
-  const float high_t = QuantileThreshold(elevation, water_ratio + low_ratio + mid_ratio + high_ratio);
-  (void)mountain_ratio;
-
-  std::vector<float> iron_score(static_cast<std::size_t>(total_tiles), -1.0f);
-  std::vector<float> copper_score(static_cast<std::size_t>(total_tiles), -1.0f);
-  std::vector<float> coal_score(static_cast<std::size_t>(total_tiles), -1.0f);
-
-  for (int y = 0; y < state.world_h; ++y) {
-    for (int x = 0; x < state.world_w; ++x) {
-      const std::size_t idx = TileIndex(state, x, y);
+    struct RegionSeed {
+      int cx = 0;
+      int cy = 0;
       TerrainType terrain = TerrainType::Lowland;
-      const float h = elevation[idx];
-      const float local_moisture = moisture[idx];
-      const float local_heat = heat[idx];
+      ResourceType resource = ResourceType::None;
+      std::uint8_t biome = 0;
+      std::uint8_t height_level = 1;
+      float elevation = 0.0f;
+      float moisture = 0.0f;
+      float heat = 0.0f;
+      float tree_density = 0.0f;
+    };
 
-      const float water_local = water_t + (local_moisture - 0.5f) * 0.08f - (local_heat - 0.5f) * 0.04f;
-      const float high_local = high_t + (local_heat - 0.5f) * 0.06f - (local_moisture - 0.5f) * 0.03f;
-      const float mid_local = mid_t + (local_heat - 0.5f) * 0.02f;
-      const float low_local = low_t - (local_moisture - 0.5f) * 0.02f;
+    auto clamp_tile = [&](int v, int limit) {
+      return std::clamp(v, 0, limit - 1);
+    };
 
-      if (h < water_local) terrain = TerrainType::Water;
-      else if (h >= high_local) terrain = TerrainType::Mountain;
-      else if (h >= mid_local) terrain = TerrainType::Highland;
-      else if (h >= low_local) terrain = TerrainType::Midland;
-      else terrain = TerrainType::Lowland;
+    std::vector<RegionSeed> regions;
+    regions.reserve(static_cast<std::size_t>(regions_x * regions_y));
 
-      std::uint8_t level = 1;
-      switch (terrain) {
-        case TerrainType::Water: level = 0; break;
-        case TerrainType::Lowland: level = static_cast<std::uint8_t>(1 + static_cast<int>(roughness[idx] > 0.62f)); break;
-        case TerrainType::Midland: level = static_cast<std::uint8_t>(2 + static_cast<int>(roughness[idx] > 0.58f)); break;
-        case TerrainType::Highland: level = static_cast<std::uint8_t>(3 + static_cast<int>(roughness[idx] > 0.54f)); break;
-        case TerrainType::Mountain: level = static_cast<std::uint8_t>(4 + static_cast<int>(roughness[idx] > 0.50f)); break;
+    for (int ry = 0; ry < regions_y; ++ry) {
+      for (int rx = 0; rx < regions_x; ++rx) {
+        const std::uint32_t h = Hash2D(static_cast<std::uint32_t>(rx), static_cast<std::uint32_t>(ry), state.world.seed ^ 0x41C1u);
+        const int base_x = rx * region_size + region_size / 2;
+        const int base_y = ry * region_size + region_size / 2;
+        const int jitter_x = static_cast<int>((h >> 1u) & 15u) - 7;
+        const int jitter_y = static_cast<int>((h >> 5u) & 15u) - 7;
+
+        RegionSeed region{};
+        region.cx = clamp_tile(base_x + jitter_x, world_w);
+        region.cy = clamp_tile(base_y + jitter_y, world_h);
+
+        const float fx = static_cast<float>(rx) / std::max(1, regions_x - 1);
+        const float fy = static_cast<float>(ry) / std::max(1, regions_y - 1);
+        const float continent = FractalNoise(fx * 1.9f + 0.4f, fy * 1.9f - 0.2f, h ^ 0x1101u, 4, 2.05f, 0.56f);
+        const float ridge = FractalNoise(fx * 4.7f + 11.0f, fy * 4.7f - 5.0f, h ^ 0x2202u, 3, 2.10f, 0.58f);
+        const float wet = FractalNoise(fx * 3.2f + 19.0f, fy * 3.2f + 7.0f, h ^ 0x3303u, 3, 2.00f, 0.56f);
+        const float heat = FractalNoise(fx * 2.5f - 13.0f, fy * 2.5f + 9.0f, h ^ 0x4404u, 3, 2.00f, 0.56f);
+
+        region.elevation = std::clamp(continent * 0.60f + ridge * 0.24f + (1.0f - std::abs(continent * 2.0f - 1.0f)) * 0.16f, 0.0f, 1.0f);
+        region.moisture = std::clamp(wet * 0.72f + (1.0f - region.elevation) * 0.28f, 0.0f, 1.0f);
+        region.heat = std::clamp((1.0f - std::abs(fy * 2.0f - 1.0f)) * 0.74f + heat * 0.26f - region.elevation * 0.18f, 0.0f, 1.0f);
+
+        if (region.elevation < 0.22f) region.terrain = TerrainType::Water;
+        else if (region.elevation < 0.42f) region.terrain = TerrainType::Lowland;
+        else if (region.elevation < 0.63f) region.terrain = TerrainType::Midland;
+        else if (region.elevation < 0.82f) region.terrain = TerrainType::Highland;
+        else region.terrain = TerrainType::Mountain;
+
+        if (region.heat < 0.30f) region.biome = 2;
+        else if (region.heat > 0.66f && region.moisture < 0.38f) region.biome = 1;
+        else if (region.moisture > 0.70f) region.biome = 3;
+
+        switch (region.terrain) {
+          case TerrainType::Water: region.height_level = 0; break;
+          case TerrainType::Lowland: region.height_level = 1; break;
+          case TerrainType::Midland: region.height_level = 2; break;
+          case TerrainType::Highland: region.height_level = 3; break;
+          case TerrainType::Mountain: region.height_level = 4; break;
+        }
+
+        if (region.terrain != TerrainType::Water) {
+          const float iron_bias = ridge * 0.40f + region.elevation * 0.22f + (region.terrain == TerrainType::Mountain ? 0.16f : 0.0f);
+          const float copper_bias = heat * 0.30f + (1.0f - region.elevation) * 0.18f + (region.terrain == TerrainType::Midland ? 0.10f : 0.0f);
+          const float coal_bias = region.moisture * 0.34f + (1.0f - region.elevation) * 0.14f + (region.terrain == TerrainType::Lowland ? 0.10f : 0.0f);
+          if (iron_bias >= copper_bias && iron_bias >= coal_bias && iron_bias > 0.55f) {
+            region.resource = ResourceType::Iron;
+          } else if (copper_bias >= iron_bias && copper_bias >= coal_bias && copper_bias > 0.55f) {
+            region.resource = ResourceType::Copper;
+          } else if (coal_bias > 0.57f) {
+            region.resource = ResourceType::Coal;
+          }
+          region.tree_density = std::clamp(region.moisture * 0.78f + (1.0f - std::abs(region.heat - 0.52f) * 1.35f) * 0.18f, 0.0f, 1.0f);
+          if (region.terrain == TerrainType::Mountain) region.tree_density *= 0.10f;
+          if (region.terrain == TerrainType::Highland) region.tree_density *= 0.45f;
+          if (region.resource != ResourceType::None) region.tree_density *= 0.30f;
+        }
+
+        regions.push_back(region);
       }
-
-      const std::uint8_t biome_region = static_cast<std::uint8_t>(std::clamp(static_cast<int>(climate[idx] * 3.999f), 0, 3));
-      state.tiles[idx] = {terrain, ResourceType::None, level, 0u, biome_region};
-
-      if (!IsOreTerrain(terrain)) continue;
-
-      const float fx = static_cast<float>(x) * 0.046f;
-      const float fy = static_cast<float>(y) * 0.046f;
-      const float blob_iron = FractalNoise(fx, fy, state.world.seed ^ 0xC11u, 4, 2.1f, 0.52f);
-      const float blob_copper = FractalNoise(fx, fy, state.world.seed ^ 0xC22u, 4, 2.1f, 0.52f);
-      const float blob_coal = FractalNoise(fx, fy, state.world.seed ^ 0xC33u, 4, 2.1f, 0.52f);
-      const float macro_iron = FractalNoise(fx * 0.36f, fy * 0.36f, state.world.seed ^ 0xD11u, 3, 2.0f, 0.56f);
-      const float macro_copper = FractalNoise(fx * 0.38f, fy * 0.38f, state.world.seed ^ 0xD22u, 3, 2.0f, 0.56f);
-      const float macro_coal = FractalNoise(fx * 0.34f, fy * 0.34f, state.world.seed ^ 0xD33u, 3, 2.0f, 0.56f);
-
-      const float climate_pref_iron = (biome_region == 3 ? 0.10f : biome_region == 2 ? 0.06f : 0.02f);
-      const float climate_pref_copper = (biome_region == 1 ? 0.10f : biome_region == 0 ? 0.06f : 0.02f);
-      const float climate_pref_coal = (biome_region == 0 ? 0.10f : biome_region == 2 ? 0.08f : 0.03f);
-
-      const float terrain_pref_iron = (terrain == TerrainType::Mountain ? 0.18f : terrain == TerrainType::Highland ? 0.11f : 0.03f);
-      const float terrain_pref_copper = (terrain == TerrainType::Highland ? 0.16f : terrain == TerrainType::Midland ? 0.10f : 0.03f);
-      const float terrain_pref_coal = (terrain == TerrainType::Midland ? 0.13f : terrain == TerrainType::Lowland ? 0.10f : 0.04f);
-
-      iron_score[idx] = blob_iron * 0.42f + macro_iron * 0.30f + roughness[idx] * 0.16f + terrain_pref_iron + climate_pref_iron;
-      copper_score[idx] =
-          blob_copper * 0.42f + macro_copper * 0.30f + (1.0f - roughness[idx]) * 0.10f + terrain_pref_copper + climate_pref_copper;
-      coal_score[idx] = blob_coal * 0.40f + macro_coal * 0.30f + moisture[idx] * 0.14f + terrain_pref_coal + climate_pref_coal;
     }
+
+    std::uint32_t lowland_tiles = 0;
+    std::uint32_t midland_tiles = 0;
+    std::uint32_t highland_tiles = 0;
+    std::uint32_t water_tiles = 0;
+    std::uint32_t mountain_tiles = 0;
+    std::uint32_t iron_tiles = 0;
+    std::uint32_t copper_tiles = 0;
+    std::uint32_t coal_tiles = 0;
+    std::uint32_t unique_sites = 0;
+    float height_sum = 0.0f;
+
+    for (int y = 0; y < world_h; ++y) {
+      for (int x = 0; x < world_w; ++x) {
+        const std::size_t idx = TileIndex(state, x, y);
+        int best_region = 0;
+        int best_d2 = 1 << 30;
+        for (std::size_t i = 0; i < regions.size(); ++i) {
+          const int dx = x - regions[i].cx;
+          const int dy = y - regions[i].cy;
+          const int d2 = dx * dx + dy * dy;
+          if (d2 < best_d2) {
+            best_d2 = d2;
+            best_region = static_cast<int>(i);
+          }
+        }
+
+        const RegionSeed& region = regions[static_cast<std::size_t>(best_region)];
+        const float dx = static_cast<float>(x - region.cx);
+        const float dy = static_cast<float>(y - region.cy);
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        const float edge_factor = std::clamp(dist / static_cast<float>(region_size) * 1.2f, 0.0f, 1.0f);
+        const std::uint32_t local_seed = Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), state.world.seed ^ 0xA5A5u);
+        const float local_macro = FractalNoise(static_cast<float>(x) * 0.06f, static_cast<float>(y) * 0.06f, local_seed ^ 0x0F11u, 3, 2.0f, 0.58f);
+        const float local_micro = FractalNoise(static_cast<float>(x) * 0.13f + 7.0f, static_cast<float>(y) * 0.13f - 11.0f, local_seed ^ 0x0F22u, 2, 2.1f, 0.60f);
+        const float local_h = std::clamp(region.elevation + (local_macro - 0.5f) * 0.16f - edge_factor * 0.05f, 0.0f, 1.0f);
+        const float local_m = std::clamp(region.moisture + (local_micro - 0.5f) * 0.12f, 0.0f, 1.0f);
+        const float local_t = std::clamp(region.heat + (local_macro - 0.5f) * 0.10f, 0.0f, 1.0f);
+        height_sum += local_h;
+
+        TerrainType terrain = region.terrain;
+        if (terrain != TerrainType::Water) {
+          if (local_h < 0.20f) terrain = TerrainType::Water;
+          else if (local_h < 0.40f) terrain = TerrainType::Lowland;
+          else if (local_h < 0.62f) terrain = TerrainType::Midland;
+          else if (local_h < 0.80f) terrain = TerrainType::Highland;
+          else terrain = TerrainType::Mountain;
+        }
+
+        std::uint8_t biome = region.biome;
+        if (local_t < 0.30f) biome = 2;
+        else if (local_t > 0.66f && local_m < 0.38f) biome = 1;
+        else if (local_m > 0.70f) biome = 3;
+
+        WorldTile tile{};
+        tile.terrain = terrain;
+        tile.resource = ResourceType::None;
+        tile.height_level = 0;
+        tile.ore_units = 0;
+        tile.biome_region = biome;
+        tile.has_belt = false;
+        tile.belt_dir = 1;
+        tile.has_tree = false;
+        tile.tree_variant = 0;
+
+        switch (terrain) {
+          case TerrainType::Water: tile.height_level = 0; ++water_tiles; break;
+          case TerrainType::Lowland: tile.height_level = 1; ++lowland_tiles; break;
+          case TerrainType::Midland: tile.height_level = 2; ++midland_tiles; break;
+          case TerrainType::Highland: tile.height_level = 3; ++highland_tiles; break;
+          case TerrainType::Mountain: tile.height_level = 4; ++mountain_tiles; break;
+        }
+
+        if (terrain != TerrainType::Water && region.resource != ResourceType::None) {
+          const float ore_noise = FractalNoise(static_cast<float>(x) * 0.10f, static_cast<float>(y) * 0.10f, local_seed ^ 0xB017u, 3, 2.0f, 0.58f);
+          const float region_center = 1.0f - std::clamp(dist / (region_size * 0.65f), 0.0f, 1.0f);
+          const float ore_mask = region_center * 0.55f + ore_noise * 0.45f;
+          if (ore_mask > 0.60f) {
+            tile.resource = region.resource;
+            const float richness = std::clamp(ore_mask, 0.0f, 1.2f);
+            tile.ore_units = static_cast<std::uint16_t>(std::clamp(14 + static_cast<int>(richness * 36.0f), 10, 56));
+            if (tile.resource == ResourceType::Iron) ++iron_tiles;
+            if (tile.resource == ResourceType::Copper) ++copper_tiles;
+            if (tile.resource == ResourceType::Coal) ++coal_tiles;
+          }
+        }
+
+        if (terrain != TerrainType::Water && tile.resource == ResourceType::None) {
+          const float tree_noise = FractalNoise(static_cast<float>(x) * 0.08f + 3.0f, static_cast<float>(y) * 0.08f - 9.0f, local_seed ^ 0xC0DEu, 3, 2.0f, 0.58f);
+          const float tree_score = region.tree_density * 0.70f + tree_noise * 0.20f + (1.0f - edge_factor) * 0.10f;
+          if (tree_score > 0.66f) {
+            tile.has_tree = true;
+            tile.tree_variant = static_cast<std::uint8_t>(Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), local_seed ^ 0x13579u) & 0x03u);
+          }
+        }
+
+        state.tiles[idx] = tile;
+        if (tile.resource != ResourceType::None) ++unique_sites;
+      }
+    }
+
+    state.world.lowland_tiles = lowland_tiles;
+    state.world.midland_tiles = midland_tiles;
+    state.world.highland_tiles = highland_tiles;
+    state.world.water_tiles = water_tiles;
+    state.world.mountain_tiles = mountain_tiles;
+    state.world.iron_tiles = iron_tiles;
+    state.world.copper_tiles = copper_tiles;
+    state.world.coal_tiles = coal_tiles;
+    state.world.unique_sites = unique_sites;
+    state.world.avg_height = world_tile_count > 0 ? height_sum / static_cast<float>(world_tile_count) : 0.0f;
+
+    return;
   }
 
-  auto assign_resource = [&](ResourceType resource, std::vector<float>& scores, std::uint32_t target_count) {
-    if (target_count == 0) return;
-    std::vector<std::size_t> order;
-    order.reserve(scores.size());
-    for (std::size_t i = 0; i < scores.size(); ++i) {
-      if (scores[i] >= 0.0f) order.push_back(i);
-    }
-    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return scores[a] > scores[b]; });
+  const int cell_size = 16;
+  const int cells_x = (state.world_w + cell_size - 1) / cell_size;
+  const int cells_y = (state.world_h + cell_size - 1) / cell_size;
+  const std::size_t cell_count = static_cast<std::size_t>(cells_x * cells_y);
 
-    std::uint32_t placed = 0;
-    for (std::size_t idx : order) {
-      if (placed >= target_count) break;
-      auto& tile = state.tiles[idx];
-      if (tile.resource != ResourceType::None || !IsOreTerrain(tile.terrain)) continue;
-      tile.resource = resource;
-      const float score = std::clamp(scores[idx], 0.0f, 1.2f);
-      const int richness = 50 + static_cast<int>(score * 90.0f);
-      tile.ore_units = static_cast<std::uint16_t>(std::clamp(richness, 30, 180));
-      placed++;
-    }
+  struct CellData {
+    TerrainType terrain = TerrainType::Lowland;
+    ResourceType resource = ResourceType::None;
+    std::uint8_t biome = 0;
+    std::uint8_t height_level = 1;
+    std::uint16_t ore_units = 0;
+    float elevation = 0.0f;
+    float tree_density = 0.0f;
   };
 
-  assign_resource(ResourceType::Iron, iron_score, state.world.iron_tiles);
-  assign_resource(ResourceType::Copper, copper_score, state.world.copper_tiles);
-  assign_resource(ResourceType::Coal, coal_score, state.world.coal_tiles);
+  std::vector<CellData> cells(cell_count);
+  auto cell_index = [cells_x](int cx, int cy) -> std::size_t {
+    return static_cast<std::size_t>(cy * cells_x + cx);
+  };
 
-  for (int pass = 0; pass < 2; ++pass) {
-    std::vector<TerrainType> next_terrain(static_cast<std::size_t>(total_tiles));
-    for (int y = 0; y < state.world_h; ++y) {
-      for (int x = 0; x < state.world_w; ++x) {
-        const std::size_t idx = TileIndex(state, x, y);
-        int counts[5] = {0, 0, 0, 0, 0};
-        for (int oy = -1; oy <= 1; ++oy) {
-          for (int ox = -1; ox <= 1; ++ox) {
-            const int nx = x + ox;
-            const int ny = y + oy;
-            if (nx < 0 || ny < 0 || nx >= state.world_w || ny >= state.world_h) continue;
-            const auto& neighbor = state.tiles[TileIndex(state, nx, ny)];
-            counts[TerrainRank(neighbor.terrain)]++;
-          }
-        }
-        const int center_rank = TerrainRank(state.tiles[idx].terrain);
-        int best_rank = center_rank;
-        int best_count = counts[center_rank];
-        for (int r = 0; r < 5; ++r) {
-          if (counts[r] > best_count + 2) {
-            best_rank = r;
-            best_count = counts[r];
-          }
-        }
-        next_terrain[idx] = RankTerrain(best_rank);
+  for (int cy = 0; cy < cells_y; ++cy) {
+    for (int cx = 0; cx < cells_x; ++cx) {
+      const float fx = static_cast<float>(cx) / std::max(1, cells_x - 1);
+      const float fy = static_cast<float>(cy) / std::max(1, cells_y - 1);
+      const std::uint32_t s = Hash2D(static_cast<std::uint32_t>(cx), static_cast<std::uint32_t>(cy), state.world.seed);
+
+      const float land = FractalNoise(fx * 2.0f + 0.3f, fy * 2.0f - 0.2f, s ^ 0x1101u, 4, 2.0f, 0.55f);
+      const float ridge = FractalNoise(fx * 4.5f + 9.0f, fy * 4.5f + 5.0f, s ^ 0x2202u, 4, 2.1f, 0.56f);
+      const float wet = FractalNoise(fx * 3.8f + 17.0f, fy * 3.8f - 11.0f, s ^ 0x3303u, 3, 2.0f, 0.58f);
+      const float heat = FractalNoise(fx * 2.7f - 13.0f, fy * 2.7f + 7.0f, s ^ 0x4404u, 3, 2.0f, 0.56f);
+
+      CellData cell{};
+      cell.elevation = std::clamp(land * 0.58f + ridge * 0.24f + (1.0f - std::abs(land * 2.0f - 1.0f)) * 0.18f, 0.0f, 1.0f);
+      if (cell.elevation < 0.22f) cell.terrain = TerrainType::Water;
+      else if (cell.elevation < 0.42f) cell.terrain = TerrainType::Lowland;
+      else if (cell.elevation < 0.63f) cell.terrain = TerrainType::Midland;
+      else if (cell.elevation < 0.82f) cell.terrain = TerrainType::Highland;
+      else cell.terrain = TerrainType::Mountain;
+
+      cell.biome = 0;
+      if (heat < 0.32f) cell.biome = 2;
+      else if (heat > 0.66f && wet < 0.38f) cell.biome = 1;
+      else if (wet > 0.68f) cell.biome = 3;
+
+      switch (cell.terrain) {
+        case TerrainType::Water: cell.height_level = 0; break;
+        case TerrainType::Lowland: cell.height_level = 1; break;
+        case TerrainType::Midland: cell.height_level = 2; break;
+        case TerrainType::Highland: cell.height_level = 3; break;
+        case TerrainType::Mountain: cell.height_level = 4; break;
       }
-    }
-    for (std::size_t i = 0; i < state.tiles.size(); ++i) {
-      auto& tile = state.tiles[i];
-      tile.terrain = next_terrain[i];
-      switch (tile.terrain) {
-        case TerrainType::Water: tile.height_level = 0; break;
-        case TerrainType::Lowland: tile.height_level = std::min<std::uint8_t>(tile.height_level, 2); break;
-        case TerrainType::Midland: tile.height_level = std::clamp<std::uint8_t>(tile.height_level, 2, 3); break;
-        case TerrainType::Highland: tile.height_level = std::clamp<std::uint8_t>(tile.height_level, 3, 4); break;
-        case TerrainType::Mountain: tile.height_level = std::max<std::uint8_t>(tile.height_level, 4); break;
+
+      if (cell.terrain != TerrainType::Water) {
+        const float iron = ridge * 0.34f + cell.elevation * 0.22f + (cell.terrain == TerrainType::Mountain ? 0.20f : 0.0f) +
+                           (heat < 0.35f ? 0.10f : 0.0f);
+        const float copper = wet * 0.28f + heat * 0.30f + (cell.terrain == TerrainType::Midland ? 0.12f : 0.0f) +
+                             (cell.terrain == TerrainType::Lowland ? 0.08f : 0.0f);
+        const float coal = wet * 0.32f + (1.0f - cell.elevation) * 0.20f + (cell.terrain == TerrainType::Lowland ? 0.10f : 0.0f);
+        if (iron >= copper && iron >= coal && iron > 0.58f) {
+          cell.resource = ResourceType::Iron;
+        } else if (copper >= iron && copper >= coal && copper > 0.56f) {
+          cell.resource = ResourceType::Copper;
+        } else if (coal > 0.58f) {
+          cell.resource = ResourceType::Coal;
+        }
+        const float resource_score = std::max({iron, copper, coal});
+        if (cell.resource != ResourceType::None) {
+          cell.ore_units = static_cast<std::uint16_t>(std::clamp(18 + static_cast<int>(resource_score * 42.0f), 12, 60));
+        }
+        cell.tree_density = std::clamp(wet * 0.70f + (1.0f - std::abs(heat - 0.52f) * 1.4f) * 0.22f, 0.0f, 1.0f);
+        if (cell.terrain == TerrainType::Mountain) cell.tree_density *= 0.2f;
+        if (cell.terrain == TerrainType::Highland) cell.tree_density *= 0.6f;
+        if (cell.resource != ResourceType::None) cell.tree_density *= 0.35f;
       }
+
+      cells[cell_index(cx, cy)] = cell;
     }
   }
 
-  for (int pass = 0; pass < 2; ++pass) {
-    std::vector<ResourceType> next_resource(static_cast<std::size_t>(total_tiles), ResourceType::None);
-    std::vector<std::uint16_t> next_units(static_cast<std::size_t>(total_tiles), 0u);
-    for (int y = 0; y < state.world_h; ++y) {
-      for (int x = 0; x < state.world_w; ++x) {
-        const std::size_t idx = TileIndex(state, x, y);
-        const auto& tile = state.tiles[idx];
-        if (!IsOreTerrain(tile.terrain)) continue;
+  for (int y = 0; y < state.world_h; ++y) {
+    for (int x = 0; x < state.world_w; ++x) {
+      const int cx = x / cell_size;
+      const int cy = y / cell_size;
+      const CellData& cell = cells[cell_index(cx, cy)];
+      const std::size_t idx = TileIndex(state, x, y);
+      auto& tile = state.tiles[idx];
 
-        int iron_n = 0;
-        int copper_n = 0;
-        int coal_n = 0;
-        for (int oy = -1; oy <= 1; ++oy) {
-          for (int ox = -1; ox <= 1; ++ox) {
-            if (ox == 0 && oy == 0) continue;
-            const int nx = x + ox;
-            const int ny = y + oy;
-            if (nx < 0 || ny < 0 || nx >= state.world_w || ny >= state.world_h) continue;
-            const auto& n = state.tiles[TileIndex(state, nx, ny)];
-            if (n.resource == ResourceType::Iron) iron_n++;
-            if (n.resource == ResourceType::Copper) copper_n++;
-            if (n.resource == ResourceType::Coal) coal_n++;
-          }
-        }
-
-        ResourceType chosen = tile.resource;
-        int chosen_neighbors = 0;
-        if (chosen == ResourceType::Iron) chosen_neighbors = iron_n;
-        else if (chosen == ResourceType::Copper) chosen_neighbors = copper_n;
-        else if (chosen == ResourceType::Coal) chosen_neighbors = coal_n;
-
-        const std::uint32_t h = Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), state.world.seed ^ 0xA531u);
-        if (chosen == ResourceType::None) {
-          if (iron_n >= 4 || copper_n >= 4 || coal_n >= 4) {
-            if (iron_n >= copper_n && iron_n >= coal_n) chosen = ResourceType::Iron;
-            else if (copper_n >= iron_n && copper_n >= coal_n) chosen = ResourceType::Copper;
-            else chosen = ResourceType::Coal;
-            if ((h & 3u) == 0u) chosen = ResourceType::None;
-          }
-        } else if (chosen_neighbors <= 1 && (h & 1u) == 0u) {
-          chosen = ResourceType::None;
-        }
-
-        next_resource[idx] = chosen;
-        if (chosen != ResourceType::None) {
-          const int base_units = tile.ore_units > 0 ? static_cast<int>(tile.ore_units) : 55;
-          next_units[idx] = static_cast<std::uint16_t>(std::clamp(base_units, 30, 180));
-        }
-      }
-    }
-    for (std::size_t i = 0; i < state.tiles.size(); ++i) {
-      state.tiles[i].resource = next_resource[i];
-      state.tiles[i].ore_units = next_units[i];
-    }
-  }
-
-  for (auto& tile : state.tiles) {
-    if (tile.resource == ResourceType::None) {
-      tile.ore_units = 0;
-      continue;
-    }
-    if (!IsOreTerrain(tile.terrain)) {
+      tile.terrain = cell.terrain;
       tile.resource = ResourceType::None;
+      tile.height_level = cell.height_level;
+      tile.biome_region = cell.biome;
       tile.ore_units = 0;
-      continue;
-    }
-    if (tile.ore_units == 0) {
-      tile.ore_units = 35;
+      tile.has_belt = false;
+      tile.belt_dir = 1;
+      tile.has_tree = false;
+      tile.tree_variant = 0;
+
+      if (cell.terrain == TerrainType::Water) {
+        continue;
+      }
+
+      const int lx = x - cx * cell_size;
+      const int ly = y - cy * cell_size;
+      const float u = (static_cast<float>(lx) + 0.5f) / static_cast<float>(cell_size);
+      const float v = (static_cast<float>(ly) + 0.5f) / static_cast<float>(cell_size);
+      const std::uint32_t s = Hash2D(static_cast<std::uint32_t>(cx), static_cast<std::uint32_t>(cy), state.world.seed ^ 0xA531u);
+
+      if (cell.resource != ResourceType::None) {
+        const float ore_field = FractalNoise(u * 2.4f + 5.0f, v * 2.4f - 3.0f, s ^ 0xC011u, 3, 2.0f, 0.58f);
+        const float center = 1.0f - std::sqrt((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f)) * 1.45f;
+        const float mask = ore_field * 0.65f + center * 0.35f;
+        if (mask > 0.58f) {
+          tile.resource = cell.resource;
+          const float local_rich = std::clamp(mask, 0.0f, 1.2f);
+          tile.ore_units = static_cast<std::uint16_t>(std::clamp(static_cast<int>(cell.ore_units * (0.70f + local_rich * 0.35f)), 10, 60));
+        }
+      }
+
+      if (tile.resource == ResourceType::None && cell.tree_density > 0.0f) {
+        const float tree_field = FractalNoise(u * 2.1f + 19.0f, v * 2.1f + 11.0f, s ^ 0xBEEF1u, 3, 2.0f, 0.56f);
+        const float edge = 1.0f - std::max(std::abs(u - 0.5f), std::abs(v - 0.5f));
+        const float tree_score = cell.tree_density * 0.68f + tree_field * 0.22f + edge * 0.10f;
+        if (tree_score > 0.62f) {
+          tile.has_tree = true;
+          tile.tree_variant = static_cast<std::uint8_t>(Hash2D(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), s ^ 0x13579u) & 0x03u);
+        }
+      }
     }
   }
 }

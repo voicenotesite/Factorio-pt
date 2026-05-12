@@ -1,0 +1,26 @@
+{
+  "legal_only": true,
+  "sources": [
+    {
+      "name": "Kenney (CC0 game assets)",
+      "url": "https://kenney.nl/assets",
+      "license": "CC0"
+    },
+    {
+      "name": "Poly Haven Textures",
+      "url": "https://polyhaven.com/textures",
+      "license": "CC0"
+    },
+    {
+      "name": "ambientCG",
+      "url": "https://ambientcg.com/list",
+      "license": "CC0"
+    },
+    {
+      "name": "OpenGameArt (filter by license)",
+      "url": "https://opengameart.org/",
+      "license": "Varies; use only allowed licenses"
+    }
+  ],
+  "note": "Do not use Factorio proprietary art in training or style datasets."
+}

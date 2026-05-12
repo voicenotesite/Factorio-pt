@@ -1,8 +1,26 @@
 [
 {
   "directory": "E:/Factorio-pt'/build",
-  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\main.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\main.cpp\"",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -O2 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\main.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\main.cpp\"",
   "file": "E:/Factorio-pt'/runtime/src/main.cpp",
   "output": "E:/Factorio-pt'/build/runtime/CMakeFiles/factorio_pt_runtime.dir/src/main.cpp.obj"
+},
+{
+  "directory": "E:/Factorio-pt'/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -O2 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\world.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\world.cpp\"",
+  "file": "E:/Factorio-pt'/runtime/src/world.cpp",
+  "output": "E:/Factorio-pt'/build/runtime/CMakeFiles/factorio_pt_runtime.dir/src/world.cpp.obj"
+},
+{
+  "directory": "E:/Factorio-pt'/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -O2 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\gameplay.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\gameplay.cpp\"",
+  "file": "E:/Factorio-pt'/runtime/src/gameplay.cpp",
+  "output": "E:/Factorio-pt'/build/runtime/CMakeFiles/factorio_pt_runtime.dir/src/gameplay.cpp.obj"
+},
+{
+  "directory": "E:/Factorio-pt'/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -DFACTORIO_PT_APP_NAME=\\\"Factorio-pt\\\" -g -std=c++20 -O2 -o runtime\\CMakeFiles\\factorio_pt_runtime.dir\\src\\render.cpp.obj -c \"E:\\Factorio-pt'\\runtime\\src\\render.cpp\"",
+  "file": "E:/Factorio-pt'/runtime/src/render.cpp",
+  "output": "E:/Factorio-pt'/build/runtime/CMakeFiles/factorio_pt_runtime.dir/src/render.cpp.obj"
 }
 ]

@@ -1,0 +1,16 @@
+{
+  "notes": "Use only images you own or open-license (CC0/CC-BY with training permission).",
+  "classes": {
+    "lowland": [
+      "assets/style-dataset/lowland/example1.png"
+    ],
+    "midland": [],
+    "highland": [],
+    "water": [],
+    "mountain": [],
+    "iron": [],
+    "copper": [],
+    "coal": [],
+    "player": []
+  }
+}

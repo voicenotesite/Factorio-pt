@@ -5,7 +5,7 @@ using System.Text.Json;
 const int TextureSize = 32;
 var kindOrder = new[]
 {
-    "lowland", "midland", "highland", "water", "mountain", "iron", "copper", "coal", "player"
+    "lowland", "midland", "highland", "water", "mountain", "iron", "copper", "coal"
 };
 
 var options = ParseArgs(args);
@@ -24,15 +24,81 @@ Console.WriteLine($"[AI-TRAINER] output={options.OutputFile}");
 Console.WriteLine($"[AI-TRAINER] profile=factory-2.5d");
 if (!string.IsNullOrWhiteSpace(options.StyleShotsDir)) Console.WriteLine($"[AI-TRAINER] style-shots={options.StyleShotsDir}");
 
-// Check for SD-generated PNGs (tools-python/sd_texture_gen.py output).
-var sdTilesDir = Path.Combine("assets", "generated", "sd_tiles");
-var hasSdTiles = Directory.Exists(sdTilesDir) &&
-                 kindOrder.Any(k => File.Exists(Path.Combine(sdTilesDir, $"{k}.png")));
-if (hasSdTiles)
-    Console.WriteLine($"[AI-TRAINER] SD tiles found in {sdTilesDir} — using as base textures.");
+// HQ tiles: assets/generated/hq-tiles/32/{hqKind}/{hqKind}_v{N:D2}_32.png
+// Mapping from atlas kind → hq-tiles folder name.
+var hqTilesRoot = Path.Combine("assets", "generated", "hq-tiles", "32");
+var hqKindMap = new Dictionary<string, string>
+{
+    { "lowland",  "grass"  },
+    { "midland",  "dirt"   },
+    { "highland", "rocky"  },
+    { "mountain", "rocky"  },
+    { "water",    "water"       }, // no hq water tile — fall through to SD
+    { "iron",     "iron"   },
+    { "copper",   "copper" },
+    { "coal",     "coal"   },
+    { "player",   ""       }, // no hq player sprite — fall through to SD
+};
+
+// Returns sorted list of pre-made 32px PNGs for this kind (up to requested count).
+List<string> FindHqPaths(string kind)
+{
+    if (!hqKindMap.TryGetValue(kind, out var hqName) || string.IsNullOrEmpty(hqName))
+        return [];
+    var dir = Path.Combine(hqTilesRoot, hqName);
+    if (!Directory.Exists(dir)) return [];
+    return Directory.GetFiles(dir, $"{hqName}_v*_32.png").OrderBy(f => f).ToList();
+}
+
+// Hardcoded texture paths — UNIVERSAL (works on any drive)
+// Find assets folder by searching up directory tree
+var searchDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+string textureBasePath = null;
+for (int i = 0; i < 6; i++)
+{
+    var candidate = Path.Combine(searchDir, "assets", "generated", "sd_tiles_qhd_realistic");
+    if (Directory.Exists(candidate))
+    {
+        textureBasePath = candidate;
+        break;
+    }
+    var parent = Path.GetDirectoryName(searchDir);
+    if (parent == searchDir) break; // Reached root
+    searchDir = parent;
+}
+if (textureBasePath == null)
+{
+    // Fallback: assume running from project root
+    textureBasePath = Path.GetFullPath(Path.Combine("assets", "generated", "sd_tiles_qhd_realistic"));
+}
+
+var hardcodedTextures = new Dictionary<string, string>
+{
+    { "lowland",  Path.Combine(textureBasePath, "lowland_1024.png") },
+    { "midland",  Path.Combine(textureBasePath, "midland_1024.png") },
+    { "highland", Path.Combine(textureBasePath, "highland_1024.png") },
+    { "water",    Path.Combine(textureBasePath, "..", "sd_tiles_qhd", "water_1024.png") },
+    { "mountain", Path.Combine(textureBasePath, "mountain_1024.png") },
+    { "iron",     Path.Combine(textureBasePath, "iron_1024.png") },
+    { "copper",   Path.Combine(textureBasePath, "copper_1024.png") },
+    { "coal",     Path.Combine(textureBasePath, "coal_1024.png") }
+};
+
+var waterMutatedPath = Path.Combine(textureBasePath, "water_1024.png");
+
+Console.WriteLine($"[AI-TRAINER] Texture path: {textureBasePath}");
+
+var allTexturesExist = hardcodedTextures.All(kvp => File.Exists(kvp.Value));
+if (allTexturesExist)
+{
+    Console.WriteLine("[AI-TRAINER] ✓ All hardcoded SD-realistic textures found!");
+}
 else
-    Console.WriteLine("[AI-TRAINER] No SD tiles found — using procedural generator.");
-    Console.WriteLine("[AI-TRAINER]   (Run: python tools-python/sd_texture_gen.py to generate SD textures)");
+{
+    Console.WriteLine("[AI-TRAINER] ✗ Missing textures!");
+    foreach (var kvp in hardcodedTextures)
+        Console.WriteLine($"  {kvp.Key}: {(File.Exists(kvp.Value) ? "✓" : "✗")} {kvp.Value}");
+}
 
 var globalStyleSamples = LoadGlobalStyleSamples(options.StyleShotsDir, rng);
 Console.WriteLine($"[AI-TRAINER] global-style-samples={globalStyleSamples.Count}");
@@ -50,21 +116,38 @@ for (var i = 0; i < kindOrder.Length; i++)
 
     var variants = new List<uint[]>(options.Variants);
 
-    // If SD-generated tile exists for this kind, use it as source and create variants via augmentation.
-    var sdPath = Path.Combine(sdTilesDir, $"{kind}.png");
-    if (hasSdTiles && File.Exists(sdPath))
+    var sdPath = hardcodedTextures.ContainsKey(kind) ? hardcodedTextures[kind] : null;
+    var sdMutatedWaterPath = kind == "water" ? waterMutatedPath : null;
+    var sdIsRealistic = true;
+
+    if (sdPath != null && File.Exists(sdPath))
     {
-        Console.WriteLine($"[AI-TRAINER] kind={kind} source=SD refs={files.Count} variants={options.Variants}");
+        var label = sdIsRealistic ? "SD-realistic" : "SD";
+        Console.WriteLine($"[AI-TRAINER] kind={kind} source={label} variants={options.Variants}");
         using var sdImg = new Bitmap(sdPath);
-        for (var v = 0; v < options.Variants; v++)
+        // TODO: Water mutation disabled until pollution system is implemented
+        // if (kind == "water" && sdMutatedWaterPath != null)
+        // {
+        //     using var mutatedImg = new Bitmap(sdMutatedWaterPath);
+        //     for (var v = 0; v < options.Variants; v++)
+        //     {
+        //         var src = v == 1 ? mutatedImg : sdImg;
+        //         using var tex = ResampleWithVariation(src, TextureSize, options.Seed + i * 997 + v * 41, v);
+        //         variants.Add(ToPackedPixels(tex));
+        //     }
+        // }
+        // else
         {
-            using var tex = ResampleWithVariation(sdImg, TextureSize, options.Seed + i * 997 + v * 41, v);
-            variants.Add(ToPackedPixels(tex));
+            for (var v = 0; v < options.Variants; v++)
+            {
+                using var tex = ResampleWithVariation(sdImg, TextureSize, options.Seed + i * 997 + v * 41, v);
+                variants.Add(ToPackedPixels(tex));
+            }
         }
     }
     else
     {
-        Console.WriteLine($"[AI-TRAINER] kind={kind} refs={files.Count} styleRefs={allRefs.Count} variants={options.Variants}");
+        Console.WriteLine($"[AI-TRAINER] kind={kind} source=proc refs={files.Count} styleRefs={allRefs.Count} variants={options.Variants}");
         for (var v = 0; v < options.Variants; v++)
         {
             using var tex = GenerateTexture(kind, allRefs, rng, options.Seed + i * 997 + v * 41, options.StyleBlend);
@@ -191,44 +274,14 @@ static List<ColorF> LoadReferenceSamples(IReadOnlyList<string> files, Random rng
 // Downsample an SD-generated high-res PNG to TextureSize with subtle per-variant tint/offset for variety.
 static Bitmap ResampleWithVariation(Bitmap src, int dstSize, int seed, int variantIndex)
 {
-    var rng = new Random(seed ^ unchecked(variantIndex * (int)0x9E3779B9u));
-    // Random crop offset within the source to create tile variety (max ±15% of src size).
-    var maxOff = src.Width / 7;
-    var ox = rng.Next(-maxOff, maxOff + 1);
-    var oy = rng.Next(-maxOff, maxOff + 1);
-
-    var dst = new Bitmap(dstSize, dstSize, PixelFormat.Format24bppRgb);
-
-    // Subtle per-variant color tint (±4% brightness, ±3% hue push)
-    var tintR = 1.0f + (float)(rng.NextDouble() - 0.5) * 0.08f;
-    var tintG = 1.0f + (float)(rng.NextDouble() - 0.5) * 0.08f;
-    var tintB = 1.0f + (float)(rng.NextDouble() - 0.5) * 0.08f;
-
-    var scaleX = (float)src.Width  / dstSize;
-    var scaleY = (float)src.Height / dstSize;
-
-    for (var y = 0; y < dstSize; y++)
-    {
-        for (var x = 0; x < dstSize; x++)
-        {
-            // Bilinear sample from source with variant crop offset (tiling-safe via modulo).
-            var sx = ((x * scaleX + ox) % src.Width  + src.Width)  % src.Width;
-            var sy = ((y * scaleY + oy) % src.Height + src.Height) % src.Height;
-
-            var x0 = (int)sx; var x1 = (x0 + 1) % src.Width;
-            var y0 = (int)sy; var y1 = (y0 + 1) % src.Height;
-            var fx = sx - x0; var fy = sy - y0;
-
-            var c00 = ColorF.FromColor(src.GetPixel(x0, y0));
-            var c10 = ColorF.FromColor(src.GetPixel(x1, y0));
-            var c01 = ColorF.FromColor(src.GetPixel(x0, y1));
-            var c11 = ColorF.FromColor(src.GetPixel(x1, y1));
-
-            var c = Lerp(Lerp(c00, c10, fx), Lerp(c01, c11, fx), fy);
-            c = Clamp(new ColorF(c.R * tintR, c.G * tintG, c.B * tintB));
-            dst.SetPixel(x, y, c.ToColor());
-        }
-    }
+    // Clean bicubic downscale — no tinting, no color modification, no variant shifts.
+    var dst = new Bitmap(dstSize, dstSize, PixelFormat.Format32bppArgb);
+    using var g = Graphics.FromImage(dst);
+    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+    g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+    g.DrawImage(src, 0, 0, dstSize, dstSize);
     return dst;
 }
 
@@ -241,21 +294,21 @@ static Bitmap GenerateTexture(string kind, IReadOnlyList<ColorF> refSamples, Ran
         for (var x = 0; x < TextureSize; x++)
         {
             var nMacro = Fbm((x + 13.7f) * 0.090f, (y + 29.4f) * 0.090f, seed ^ 0x132451, 4);
-            var nMicro = Fbm((x + 3.1f)  * 0.48f,  (y + 7.9f)  * 0.48f,  seed ^ 0x823147, 3);
-            var nFine  = Fbm((x + 1.7f)  * 1.20f,  (y + 5.3f)  * 1.20f,  seed ^ 0x934521, 2);
+            var nMicro = Fbm((x + 3.1f) * 0.48f, (y + 7.9f) * 0.48f, seed ^ 0x823147, 3);
+            var nFine = Fbm((x + 1.7f) * 1.20f, (y + 5.3f) * 1.20f, seed ^ 0x934521, 2);
             // Strong directional light + noise-driven shade for high contrast.
             var light = 0.90f + ((x - y) / (float)(TextureSize * 2)) * 0.20f;
             var shade = light + (nMacro - 0.5f) * 0.44f + (nMicro - 0.5f) * 0.20f;
 
             var c = kind switch
             {
-                "water"    => GenerateWaterColor(nMacro, nMicro, x, y, shade, seed),
+                "water" => GenerateWaterColor(nMacro, nMicro, x, y, shade, seed),
                 "mountain" => GenerateMountainColor(nMacro, nMicro, nFine, x, y, shade, seed),
-                "iron"     => GenerateIronColor(nMacro, nMicro, x, y, shade, seed),
-                "copper"   => GenerateCopperColor(nMacro, nMicro, x, y, shade, seed),
-                "coal"     => GenerateCoalColor(nMacro, nMicro, x, y, shade, seed),
-                "player"   => GeneratePlayerColor(x, y, shade),
-                _          => GenerateTerrainColor(kind, nMacro, nMicro, nFine, x, y, shade, seed)
+                "iron" => GenerateIronColor(nMacro, nMicro, x, y, shade, seed),
+                "copper" => GenerateCopperColor(nMacro, nMicro, x, y, shade, seed),
+                "coal" => GenerateCoalColor(nMacro, nMicro, x, y, shade, seed),
+                "player" => GeneratePlayerColor(x, y, shade),
+                _ => GenerateTerrainColor(kind, nMacro, nMicro, nFine, x, y, shade, seed)
             };
 
             c = ApplyPixelAccent(c, x, y, kind, seed);
@@ -268,55 +321,61 @@ static Bitmap GenerateTexture(string kind, IReadOnlyList<ColorF> refSamples, Ran
 
 static ColorF GenerateTerrainColor(string kind, float nMacro, float nMicro, float nFine, int x, int y, float shade, int seed)
 {
-    // High-contrast dark/light pairs — wide range per kind.
+    // Factorio-accurate palette: warm sandy-brown dominant, muted olive grass, pale stone.
     var (dark, light) = kind switch
     {
-        "lowland" => (new ColorF(40, 82, 22),   new ColorF(118, 168, 60)),  // vivid Factorio grass
-        "midland" => (new ColorF(80, 56, 24),   new ColorF(178, 132, 70)),  // warm earthy dirt
-        _         => (new ColorF(114, 88, 48),  new ColorF(202, 164, 98))   // highland sandy stone
+        // Grass: dark olive green, sparse — not vivid, muted like real Factorio
+        "lowland" => (new ColorF(48, 76, 28), new ColorF(94, 130, 56)),
+        // Dirt: warm sandy brown — this is the DOMINANT Factorio terrain color
+        "midland" => (new ColorF(96, 74, 44), new ColorF(158, 122, 74)),
+        // Highland/sandy rock: pale warm beige
+        _ => (new ColorF(128, 104, 66), new ColorF(192, 158, 104))
     };
 
-    // Smooth continuous gradient — NO quantization, apply contrast curve.
-    var n = Math.Clamp((nMacro * 0.65f + nMicro * 0.35f - 0.5f) * 1.6f + 0.5f, 0f, 1f);
+    var n = Math.Clamp((nMacro * 0.60f + nMicro * 0.40f - 0.5f) * 1.5f + 0.5f, 0f, 1f);
     var c = Lerp(dark, light, n);
     c = Mul(c, shade);
 
     if (kind == "lowland")
     {
-        // Grass blades — vivid green pops
-        if (Hash01(x, y, seed ^ 0x292) > 0.84f && nMicro > 0.52f)
-            c = Add(c, new ColorF(-10, 28, -8));
-        // Dark soil patches showing through
-        if (Hash01(x * 2, y * 3, seed ^ 0x519) < 0.09f && nMicro < 0.36f)
-            c = Add(c, new ColorF(8, -20, -6));
-        // Occasional pale pebble
+        // Sparse dark grass blades (NOT vivid — muted olive)
+        if (Hash01(x, y, seed ^ 0x292) > 0.80f && nMicro > 0.55f)
+            c = Add(c, new ColorF(-6, 18, -8));
+        // Brown soil patches showing through grass
+        if (Hash01(x * 2, y * 3, seed ^ 0x519) < 0.12f)
+            c = Add(c, new ColorF(22, 10, -4));
+        // Tiny pebbles
         if (Hash01(x * 5, y * 7, seed ^ 0x731) > 0.96f)
-            c = Add(c, new ColorF(18, 14, 8));
-        // Fine detail micro-variation
-        c = Add(c, new ColorF(0f, (nFine - 0.5f) * 14f, 0f));
+            c = Add(c, new ColorF(14, 10, 6));
+        // Micro height variation in green channel
+        c = Add(c, new ColorF(0f, (nFine - 0.5f) * 10f, 0f));
     }
     else if (kind == "midland")
     {
-        // Soil grain lines
-        if ((x + y * 2) % 5 == 0 && Hash01(x, y, seed ^ 0x411) > 0.72f)
-            c = Add(c, new ColorF(12, 8, 4));
-        // Dark dry cracks
-        if (Hash01(x * 4, y * 3, seed ^ 0x621) > 0.88f && nMicro > 0.66f)
-            c = Add(c, new ColorF(-24, -18, -12));
-        // Fine grain
-        c = Add(c, new ColorF((nFine - 0.5f) * 10f, (nFine - 0.5f) * 7f, (nFine - 0.5f) * 4f));
+        // Fine soil grain — warm reddish highlights
+        if ((x * 3 + y * 7) % 11 < 2 && Hash01(x, y, seed ^ 0x411) > 0.65f)
+            c = Add(c, new ColorF(10, 6, 2));
+        // Dark dry compressed soil patches
+        if (Hash01(x * 4, y * 3, seed ^ 0x621) > 0.85f && nMicro > 0.62f)
+            c = Add(c, new ColorF(-22, -16, -10));
+        // Sandy highlight spots
+        if (Hash01(x * 3, y * 5, seed ^ 0x841) > 0.90f && nMacro > 0.55f)
+            c = Add(c, new ColorF(18, 12, 6));
+        c = Add(c, new ColorF((nFine - 0.5f) * 8f, (nFine - 0.5f) * 6f, (nFine - 0.5f) * 3f));
     }
     else // highland
     {
-        // Deep dry cracks
-        if (Hash01(x * 5, y * 7, seed ^ 0x393) > 0.78f && nMicro > 0.60f)
-            c = Add(c, new ColorF(-28, -24, -16));
-        // Light stone faces
-        if (Hash01(x * 3, y * 4, seed ^ 0x812) > 0.85f && nMacro > 0.56f)
-            c = Add(c, new ColorF(22, 16, 8));
-        // Micro pebbles
-        if (Hash01(x * 7, y * 5, seed ^ 0x913) > 0.93f)
-            c = Add(c, new ColorF(16, 12, 6));
+        // Deep dry crack lines
+        if (Hash01(x * 5, y * 7, seed ^ 0x393) > 0.74f && nMicro > 0.65f)
+            c = Add(c, new ColorF(-26, -22, -14));
+        // Pale flat stone surfaces
+        if (Hash01(x * 3, y * 4, seed ^ 0x812) > 0.88f && nMacro > 0.54f)
+            c = Add(c, new ColorF(20, 14, 8));
+        // Small stones
+        if (Hash01(x * 7, y * 5, seed ^ 0x913) > 0.94f)
+            c = Add(c, new ColorF(18, 14, 8));
+        if (Hash01(x * 9, y * 3, seed ^ 0xA13) > 0.96f)
+            c = Add(c, new ColorF(-20, -16, -10));  // dark pebble
     }
 
     return Clamp(c);
@@ -324,7 +383,7 @@ static ColorF GenerateTerrainColor(string kind, float nMacro, float nMicro, floa
 
 static ColorF GenerateWaterColor(float nMacro, float nMicro, int x, int y, float shade, int seed)
 {
-    var deep    = new ColorF(16, 68, 152);
+    var deep = new ColorF(16, 68, 152);
     var shallow = new ColorF(60, 148, 218);
     var n = Math.Clamp((nMacro * 0.65f + nMicro * 0.35f - 0.5f) * 1.5f + 0.5f, 0f, 1f);
     var c = Lerp(deep, shallow, n);
@@ -337,7 +396,7 @@ static ColorF GenerateWaterColor(float nMacro, float nMicro, int x, int y, float
 
 static ColorF GenerateMountainColor(float nMacro, float nMicro, float nFine, int x, int y, float shade, int seed)
 {
-    var rockDark  = new ColorF(52, 49, 44);
+    var rockDark = new ColorF(52, 49, 44);
     var rockLight = new ColorF(116, 110, 100);
     var n = Math.Clamp((nMacro - 0.5f) * 1.7f + 0.5f, 0f, 1f);
     var c = Lerp(rockDark, rockLight, n);
@@ -358,7 +417,7 @@ static ColorF GenerateMountainColor(float nMacro, float nMicro, float nFine, int
 
 static ColorF GenerateIronColor(float nMacro, float nMicro, int x, int y, float shade, int seed)
 {
-    var dark   = new ColorF(64, 84, 112);
+    var dark = new ColorF(64, 84, 112);
     var bright = new ColorF(162, 188, 218);
     var n = Math.Clamp((nMacro - 0.5f) * 1.7f + 0.5f, 0f, 1f);
     var c = Lerp(dark, bright, n);
@@ -376,7 +435,7 @@ static ColorF GenerateIronColor(float nMacro, float nMicro, int x, int y, float 
 
 static ColorF GenerateCopperColor(float nMacro, float nMicro, int x, int y, float shade, int seed)
 {
-    var dark   = new ColorF(132, 48, 14);
+    var dark = new ColorF(132, 48, 14);
     var bright = new ColorF(248, 132, 58);
     var n = Math.Clamp((nMacro - 0.5f) * 1.7f + 0.5f, 0f, 1f);
     var c = Lerp(dark, bright, n);
