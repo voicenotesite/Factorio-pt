@@ -92,6 +92,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.06, 0.08, 0.11)))
         .add_plugins(
             DefaultPlugins
+                .set(ImagePlugin::default_nearest())   // nearest-neighbor: no blur, no shimmer
                 .set(AssetPlugin {
                     file_path: "../assets".to_string(),
                     ..default()
@@ -107,7 +108,7 @@ fn main() {
                 }),
         )
         .add_systems(Startup, setup)
-        .add_systems(Update, (player_movement, camera_follow, animate_water))
+        .add_systems(Update, (player_movement, camera_follow, animate_water, pixel_snap_camera))
         .run();
 }
 
@@ -130,17 +131,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     println!("Camera start: x={:.1} y={:.1}", start.x, start.y);
     spawn_world(&mut commands, &world, &textures, seed);
 
-    // Player sprite — white body + colored outline to stand out on any biome
-    let player_tex = asset_server.load("generated/sd_tiles_qhd_realistic/player_1024.png");
-    let pw = CHUNK_SIZE * 0.55;
-    let ph = CHUNK_SIZE * 0.70;
+    // Player — bright yellow square with black border, clearly visible on any terrain
+    let pr = CHUNK_SIZE * 0.40;
     commands.spawn((
-        {
-            let mut s = Sprite::from_image(player_tex);
-            s.custom_size = Some(Vec2::new(pw, ph));
-            s
-        },
-        Transform::from_xyz(start.x, start.y + ph * 0.25, 500.0),
+        Sprite::from_color(Color::srgb(1.0, 0.88, 0.10), Vec2::new(pr, pr)),
+        Transform::from_xyz(start.x, start.y, 500.0),
         Player,
     ));
 
@@ -149,7 +144,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         Projection::Orthographic(OrthographicProjection {
             near: -5000.0,
             far: 5000.0,
-            scale: 0.85,
+            scale: 0.35,
             ..OrthographicProjection::default_2d()
         }),
         Transform::from_xyz(start.x, start.y, 1000.0),
@@ -206,16 +201,26 @@ fn camera_follow(
     ct.translation = ct.translation.lerp(target, 0.12);
 }
 
+fn pixel_snap_camera(
+    mut cam_q: Query<&mut Transform, With<CameraRig>>,
+) {
+    // Snap camera to whole pixels to eliminate sub-pixel shimmer
+    if let Ok(mut ct) = cam_q.single_mut() {
+        ct.translation.x = ct.translation.x.round();
+        ct.translation.y = ct.translation.y.round();
+    }
+}
+
 fn animate_water(time: Res<Time>, mut q: Query<(&mut Sprite, &WaterTile)>) {
     let t = time.elapsed_secs();
     for (mut sprite, water) in &mut q {
-        let wave = (t * 1.7 + water.phase).sin() * 0.08;
-        sprite.color = Color::srgba(0.88 + wave * 0.2, 0.97 + wave * 0.15, 1.0, 0.92);
+        // Subtle shimmer — tint stays close to neutral so texture shows through
+        let wave = (t * 1.4 + water.phase).sin() * 0.04;
+        sprite.color = Color::srgba(0.80 + wave, 0.92 + wave * 0.5, 1.0, 0.88);
     }
 }
 
 fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTextures, seed: u32) {
-    // Tile dimensions: full width, squashed height for 2.5D top-down iso feel
     let tw = CHUNK_SIZE;
     let th = CHUNK_SIZE * ISO_Y_RATIO;
     let tile_size = Vec2::new(tw, th);
@@ -236,15 +241,18 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             let chunk = world.chunks[(y * world.width + x) as usize];
             let sx = offset_x + x as f32 * tw;
             let sy = offset_y + y as f32 * th;
-            // Y-sort depth: rows drawn back-to-front; elevation slightly lifts in z only
             let z = y as f32 * 0.01 + chunk.elevation * 0.005;
 
-            // --- BASE TEXTURE TILE (fills the entire cell, no gap) ---
+            // --- BASE TEXTURE with per-tile brightness variation (+/- 7%) ---
+            let var = 0.93 + hash01(x, y, seed ^ 0xF00F) * 0.14;
             let img = terrain_image(textures, chunk.terrain, chunk.biome);
             let tint = biome_tint(chunk.terrain, chunk.biome, chunk.moisture, chunk.heat);
+            let tr = (tint.to_srgba().red   * var).min(1.0);
+            let tg = (tint.to_srgba().green * var).min(1.0);
+            let tb = (tint.to_srgba().blue  * var).min(1.0);
             let mut base = Sprite::from_image(img);
             base.custom_size = Some(tile_size);
-            base.color = tint;
+            base.color = Color::srgb(tr, tg, tb);
             let mut ec = commands.spawn((base, Transform::from_xyz(sx, sy, z)));
             if chunk.terrain == Terrain::Water {
                 ec.insert(WaterTile {
@@ -252,106 +260,109 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 });
             }
 
-            // --- ELEVATION SHADING: darker for lower, slightly brighter for peaks ---
+            // --- ELEVATION SHADE (subtle, only low terrain) ---
+            if chunk.terrain != Terrain::Water && chunk.elevation < 0.35 {
+                let shade_a = (0.35 - chunk.elevation) * 0.22;
+                commands.spawn((
+                    Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, shade_a), tile_size),
+                    Transform::from_xyz(sx, sy, z + 0.001),
+                ));
+            }
+
+            // --- CLIFF SHADOW + thin terrain-border line ---
             if chunk.terrain != Terrain::Water {
-                let shade_a = ((0.55 - chunk.elevation) * 0.38).clamp(0.0, 0.22);
-                if shade_a > 0.01 {
+                if let Some(south) = chunk_at(x, y - 1) {
+                    let drop = chunk.elevation - south.elevation;
+                    if drop > 0.07 {
+                        let a = (drop * 1.4).clamp(0.0, 0.45);
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, a),
+                                Vec2::new(tw, 3.0)),
+                            Transform::from_xyz(sx, sy - th * 0.5 - 1.5, z + 0.002),
+                        ));
+                    }
+                }
+                if chunk_at(x, y - 1).map(|c| c.terrain) != Some(chunk.terrain) {
                     commands.spawn((
-                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, shade_a), tile_size),
-                        Transform::from_xyz(sx, sy, z + 0.001),
+                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.22),
+                            Vec2::new(tw, 1.5)),
+                        Transform::from_xyz(sx, sy - th * 0.5 - 0.5, z + 0.0018),
                     ));
                 }
             }
 
-            // --- SOUTH-EDGE WALL: dark strip below tile when neighbour is lower ---
-            let wall_h = 6.0; // pixels of "cliff" visible below each tile
-            if chunk.terrain != Terrain::Water {
-                if let Some(south) = chunk_at(x, y - 1) {
-                    let drop = chunk.elevation - south.elevation;
-                    if drop > 0.06 {
-                        let a = (drop * 1.8).clamp(0.0, 0.55);
-                        commands.spawn((
-                            Sprite::from_color(
-                                Color::srgba(0.07, 0.06, 0.05, a),
-                                Vec2::new(tw, wall_h),
-                            ),
-                            Transform::from_xyz(sx, sy - th * 0.5 - wall_h * 0.5, z + 0.002),
-                        ));
-                    }
-                }
-            }
-
-            // --- ORE: 3-4 small ore-texture patches scattered on terrain ---
+            // --- ORE PATCHES: Factorio-style dense nugget clusters ---
             if let Some(ore) = chunk.ore {
                 let ore_tex = match ore {
                     Ore::Iron   => textures.iron.clone(),
                     Ore::Copper => textures.copper.clone(),
                     Ore::Coal   => textures.coal.clone(),
                 };
-                let base_tint = ore_tint(ore);
-                let count = 3u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
+                let ore_col = ore_tint(ore);
+                let count = 5u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let scale = 0.28 + hash01(x + i as i32, y + 55, seed ^ 0xF005) * 0.14;
-                    let pw = tw * scale;
-                    let ph = th * scale * 0.75;
+                    let sc = 0.20 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.18;
                     let mut spr = Sprite::from_image(ore_tex.clone());
-                    spr.custom_size = Some(Vec2::new(pw, ph));
-                    spr.color = base_tint.with_alpha(0.90);
+                    spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
+                    spr.color = ore_col.with_alpha(0.95);
                     commands.spawn((spr, Transform::from_xyz(
-                        sx + nx * tw * 0.72,
-                        sy + ny * th * 0.72,
+                        sx + nx * tw * 0.75,
+                        sy + ny * th * 0.75,
                         z + 0.003 + i as f32 * 0.00005,
                     )));
                 }
             }
 
-            // --- TREES: small scattered dots, NOT large blocks ---
-            if chunk.tree_density > 0.62 && chunk.terrain != Terrain::Water {
+            // --- TREES: recognizable canopy dots with highlight ---
+            if chunk.tree_density > 0.55 && chunk.terrain != Terrain::Water {
                 let tree_col = tree_color(chunk.biome, chunk.moisture);
-                let count = if chunk.tree_density > 0.80 { 4u32 } else { 2u32 };
+                let count = if chunk.tree_density > 0.78 { 5u32 } else if chunk.tree_density > 0.65 { 3u32 } else { 2u32 };
                 for t in 0..count {
-                    let hx = hash01(x + t as i32, y,          seed ^ (0xBEEF + t * 7)) - 0.5;
-                    let hy = hash01(x,             y + t as i32, seed ^ (0xCAFE + t * 5)) - 0.5;
+                    let hx = hash01(x + t as i32, y,         seed ^ (0xBEEF + t * 7)) - 0.5;
+                    let hy = hash01(x, y + t as i32,         seed ^ (0xCAFE + t * 5)) - 0.5;
                     if hash01(x + t as i32, y + t as i32, seed ^ 0xDEAD) > chunk.tree_density { continue; }
-                    // canopy circle (wider than tall to look top-down)
-                    let cw = tw * (0.16 + hash01(x + t as i32, y + 77, seed ^ 0xCE01) * 0.10);
-                    let ch = cw * 0.65;
-                    // darker trunk dot below canopy
-                    let trunk_col = Color::srgb(0.22, 0.16, 0.09);
+                    let cw = tw * (0.18 + hash01(x + t as i32, y + 77, seed ^ 0xCE01) * 0.10);
+                    let ch = cw * 0.75;
+                    let px = sx + hx * tw * 0.68;
+                    let py = sy + hy * th * 0.68;
+                    // drop shadow
                     commands.spawn((
-                        Sprite::from_color(trunk_col.with_alpha(0.80),
-                            Vec2::new(cw * 0.28, ch * 0.55)),
-                        Transform::from_xyz(
-                            sx + hx * tw * 0.72,
-                            sy + hy * th * 0.60,
-                            z + 0.004 + t as f32 * 0.0001,
-                        ),
+                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.25),
+                            Vec2::new(cw * 1.15, ch * 0.50)),
+                        Transform::from_xyz(px + cw * 0.12, py - ch * 0.28, z + 0.0038 + t as f32 * 0.0001),
                     ));
+                    // canopy
                     commands.spawn((
-                        Sprite::from_color(tree_col.with_alpha(0.85), Vec2::new(cw, ch)),
-                        Transform::from_xyz(
-                            sx + hx * tw * 0.72,
-                            sy + hy * th * 0.60 + ch * 0.30,
-                            z + 0.0041 + t as f32 * 0.0001,
-                        ),
+                        Sprite::from_color(tree_col, Vec2::new(cw, ch)),
+                        Transform::from_xyz(px, py, z + 0.004 + t as f32 * 0.0001),
+                    ));
+                    // highlight
+                    let tc = tree_col.to_srgba();
+                    let hcol = Color::srgba(
+                        (tc.red   + 0.18).min(1.0),
+                        (tc.green + 0.22).min(1.0),
+                        (tc.blue  + 0.10).min(1.0),
+                        0.60,
+                    );
+                    commands.spawn((
+                        Sprite::from_color(hcol, Vec2::new(cw * 0.45, ch * 0.45)),
+                        Transform::from_xyz(px - cw * 0.08, py + ch * 0.12, z + 0.0041 + t as f32 * 0.0001),
                     ));
                 }
             }
 
-            // --- LANDMARK: small distinct marker, subtle glow ring ---
+            // --- LANDMARK MARKER ---
             if let Some(lm) = chunk.landmark {
                 let (col, glow) = landmark_colors(lm);
-                // Outer glow ring (semi-transparent, ~half tile)
                 commands.spawn((
-                    Sprite::from_color(glow.with_alpha(0.22), Vec2::new(tw * 0.55, th * 0.55)),
+                    Sprite::from_color(glow.with_alpha(0.18), Vec2::new(tw * 0.70, th * 0.70)),
                     Transform::from_xyz(sx, sy, z + 0.005),
                 ));
-                // Inner icon (small, ~1/6 tile)
                 commands.spawn((
-                    Sprite::from_color(col.with_alpha(0.92), Vec2::new(tw * 0.14, th * 0.18)),
-                    Transform::from_xyz(sx, sy, z + 0.006),
+                    Sprite::from_color(col, Vec2::new(tw * 0.20, th * 0.24)),
+                    Transform::from_xyz(sx, sy + th * 0.05, z + 0.006),
                 ));
             }
         }
@@ -380,27 +391,33 @@ fn terrain_image(textures: &TileTextures, terrain: Terrain, biome: Biome) -> Han
     }
 }
 
-// Unified tint: texture is multiplied by this color to express biome character
+// Factorio-inspired tints: multiply texture by these to get correct biome feel
 fn biome_tint(terrain: Terrain, biome: Biome, moisture: f32, heat: f32) -> Color {
     match terrain {
-        Terrain::Water => match biome {
-            Biome::Frozen => Color::srgb(0.76, 0.90, 1.00),
-            _ => Color::srgb(0.82, 0.95, 1.00),
+        Terrain::Water => Color::srgb(0.70, 0.88, 1.00), // blue water tint
+        Terrain::Lowland => match biome {
+            Biome::Frozen    => Color::srgb(0.85, 0.92, 0.98),
+            Biome::Desert    => Color::srgb(0.96, 0.88, 0.64),
+            Biome::Wetland   => Color::srgb(0.68, 0.90, 0.62),
+            Biome::Volcanic  => Color::srgb(0.78, 0.70, 0.64),
+            Biome::Temperate => Color::srgb(0.72, 0.90, 0.58),
         },
-            _ => {
-            let (r, g, b): (f32, f32, f32) = match biome {
-                Biome::Frozen    => (0.88, 0.94, 1.00),
-                Biome::Desert    => (1.10, 0.95, 0.72),
-                Biome::Wetland   => (0.80, 1.05, 0.80),
-                Biome::Volcanic  => (0.90, 0.82, 0.76),
-                Biome::Temperate => {
-                    let g = 0.92 + moisture * 0.10;
-                    let r = 0.92 + heat * 0.06;
-                    (r, g, 0.86_f32)
-                }
-            };
-            Color::srgb(r.min(1.0), g.min(1.0), b.min(1.0))
-        }
+        Terrain::Midland => match biome {
+            Biome::Frozen    => Color::srgb(0.82, 0.90, 0.95),
+            Biome::Desert    => Color::srgb(0.88, 0.80, 0.58),
+            Biome::Wetland   => Color::srgb(0.62, 0.84, 0.60),
+            Biome::Volcanic  => Color::srgb(0.72, 0.64, 0.58),
+            Biome::Temperate => {
+                let g = (0.76 + moisture * 0.14).min(0.92);
+                Color::srgb(0.62 + heat * 0.08, g, 0.50)
+            }
+        },
+        Terrain::Highland => match biome {
+            Biome::Frozen    => Color::srgb(0.90, 0.94, 1.00),
+            Biome::Desert    => Color::srgb(0.80, 0.72, 0.52),
+            _                => Color::srgb(0.72, 0.76, 0.68),
+        },
+        Terrain::Mountain => Color::srgb(0.78, 0.78, 0.80),
     }
 }
 
@@ -434,168 +451,125 @@ fn landmark_colors(lm: Landmark) -> (Color, Color) {
 
 fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
     let mut chunks = Vec::with_capacity((width * height) as usize);
-    let region_size = 9;
 
     for y in 0..height {
         for x in 0..width {
-            let rx = x / region_size;
-            let ry = y / region_size;
-            let region_seed = hash2d(rx as u32, ry as u32, seed ^ 0x41C1);
+            // Normalized [0,1] coords for noise sampling
+            let fx = x as f32 / width as f32;
+            let fy = y as f32 / height as f32;
 
-            let fx = x as f32 / (width - 1).max(1) as f32;
-            let fy = y as f32 / (height - 1).max(1) as f32;
-            let px = fx * 2.0 - 1.0;
-            let py = fy * 2.0 - 1.0;
+            // --- ELEVATION: pure noise, no island mask ---
+            let base = fbm(fx * 3.8 + 0.5, fy * 3.8 + 1.3, seed ^ 0x1101, 5, 2.1, 0.52);
+            let detail = fbm(fx * 8.2 - 4.0, fy * 8.2 + 2.7, seed ^ 0x2202, 3, 2.0, 0.48);
+            let elevation = clamp01(base * 0.78 + detail * 0.22);
 
-            let planet_mask = clamp01(1.0 - (px * px + py * py).sqrt());
-            let continent = fbm(fx * 2.3 + 0.4, fy * 2.3 - 0.2, region_seed ^ 0x1101, 4, 2.05, 0.56);
-            let tectonic = fbm(fx * 1.3 - 8.0, fy * 1.3 + 6.0, region_seed ^ 0x1201, 3, 2.0, 0.54);
-            let ridge = fbm(fx * 5.4 + 11.0, fy * 5.4 - 5.0, region_seed ^ 0x2202, 3, 2.10, 0.58);
-            let wet = fbm(fx * 3.8 + 19.0, fy * 3.8 + 7.0, region_seed ^ 0x3303, 3, 2.00, 0.56);
-            let heat = fbm(fx * 2.6 - 13.0, fy * 2.6 + 9.0, region_seed ^ 0x4404, 3, 2.00, 0.56);
+            // --- MOISTURE ---
+            let wet = fbm(fx * 4.5 + 7.0, fy * 4.5 - 3.0, seed ^ 0x3303, 4, 2.0, 0.54);
+            let moisture = clamp01(wet * 0.72 + (1.0 - elevation) * 0.28);
 
-            let elevation = clamp01(
-                planet_mask * 0.70
-                    + continent * 0.22
-                    + tectonic * 0.07
-                    + ridge * 0.16
-                    - (1.0 - planet_mask) * 0.18
-                    - 0.04,
-            );
-            let moisture = clamp01(wet * 0.66 + continent * 0.14 + (1.0 - elevation) * 0.20);
-            let temp = clamp01((1.0 - py.abs()) * 0.62 + heat * 0.38 - elevation * 0.24);
+            // --- HEAT ---
+            let heat_noise = fbm(fx * 3.1 - 9.0, fy * 3.1 + 5.0, seed ^ 0x4404, 3, 2.0, 0.50);
+            let temp = clamp01(heat_noise * 0.65 + 0.35 - elevation * 0.25);
 
-            let terrain = if elevation < 0.24 || planet_mask < 0.09 {
+            // --- TERRAIN ---
+            let terrain = if elevation < 0.38 {
                 Terrain::Water
-            } else if elevation < 0.42 {
+            } else if elevation < 0.52 {
                 Terrain::Lowland
-            } else if elevation < 0.63 {
+            } else if elevation < 0.68 {
                 Terrain::Midland
-            } else if elevation < 0.82 {
+            } else if elevation < 0.84 {
                 Terrain::Highland
             } else {
                 Terrain::Mountain
             };
 
+            // --- BIOME ---
             let biome = if terrain == Terrain::Water {
-                if temp < 0.30 {
-                    Biome::Frozen
-                } else {
-                    Biome::Wetland
-                }
-            } else if temp < 0.28 {
+                if temp < 0.28 { Biome::Frozen } else { Biome::Wetland }
+            } else if temp < 0.26 {
                 Biome::Frozen
-            } else if moisture < 0.27 && temp > 0.55 {
+            } else if moisture < 0.25 && temp > 0.58 {
                 Biome::Desert
-            } else if moisture > 0.67 {
+            } else if moisture > 0.68 {
                 Biome::Wetland
-            } else if temp > 0.72 && moisture < 0.46 {
+            } else if temp > 0.74 && moisture < 0.44 {
                 Biome::Volcanic
             } else {
                 Biome::Temperate
             };
 
-            let ore = if terrain == Terrain::Water {
+            // --- ORES: Factorio-style round patches ---
+            let ore = if terrain == Terrain::Water || terrain == Terrain::Mountain {
                 None
             } else {
-                let belt_iron = 1.0 - ((fbm(fx * 6.2 + 4.0, fy * 2.5 - 3.0, seed ^ 0xA110, 2, 2.0, 0.5) - 0.5).abs() * 2.0);
-                let belt_copper =
-                    1.0 - ((fbm(fx * 3.2 - 7.0, fy * 5.7 + 2.0, seed ^ 0xB220, 2, 2.0, 0.5) - 0.5).abs() * 2.0);
-                let belt_coal = 1.0 - ((fbm(fx * 4.8 + 9.0, fy * 4.8 - 9.0, seed ^ 0xC330, 2, 2.0, 0.5) - 0.5).abs() * 2.0);
+                // Each ore type has a patch noise — high value = dense patch center
+                let iron_n   = fbm(fx * 9.5 + 3.1,  fy * 9.5 - 1.7, seed ^ 0xA110, 2, 2.0, 0.5);
+                let copper_n = fbm(fx * 8.0 - 7.3,  fy * 8.0 + 4.2, seed ^ 0xB220, 2, 2.0, 0.5);
+                let coal_n   = fbm(fx * 10.5 + 11.0, fy * 10.5 - 8.0, seed ^ 0xC330, 2, 2.0, 0.5);
 
-                let iron_bias = belt_iron * 0.42
-                    + elevation * 0.26
-                    + if terrain == Terrain::Mountain { 0.14 } else { 0.0 }
+                // Bias based on terrain/biome to give Factorio-like distribution
+                let iron_score = iron_n
+                    + if terrain == Terrain::Highland { 0.10 } else { 0.0 }
                     + if biome == Biome::Frozen { 0.06 } else { 0.0 };
-                let copper_bias = belt_copper * 0.42
-                    + temp * 0.25
-                    + if biome == Biome::Desert || biome == Biome::Volcanic { 0.12 } else { 0.0 };
-                let coal_bias = belt_coal * 0.42
-                    + moisture * 0.28
-                    + if biome == Biome::Wetland || terrain == Terrain::Lowland { 0.10 } else { 0.0 };
+                let copper_score = copper_n
+                    + if biome == Biome::Desert || biome == Biome::Volcanic { 0.10 } else { 0.0 };
+                let coal_score = coal_n
+                    + if moisture > 0.55 { 0.08 } else { 0.0 };
 
-                let ore_density = hash01(x, y, seed ^ 0x0E50);
-                if iron_bias >= copper_bias && iron_bias >= coal_bias && iron_bias > 0.66 && ore_density > 0.56 {
+                let threshold = 0.84; // tight threshold = small dense patches like Factorio
+                if iron_score > threshold && iron_score >= copper_score && iron_score >= coal_score {
                     Some(Ore::Iron)
-                } else if copper_bias >= iron_bias && copper_bias >= coal_bias && copper_bias > 0.66 && ore_density > 0.56 {
+                } else if copper_score > threshold && copper_score >= coal_score {
                     Some(Ore::Copper)
-                } else if coal_bias > 0.66 && ore_density > 0.56 {
+                } else if coal_score > threshold {
                     Some(Ore::Coal)
                 } else {
                     None
                 }
             };
 
-            let tree_density = if terrain == Terrain::Water {
+            // --- TREE DENSITY ---
+            let tree_density = if terrain == Terrain::Water || terrain == Terrain::Mountain {
                 0.0
             } else {
-                let mut density = moisture * 0.74 + (1.0 - (temp - 0.52).abs() * 1.35) * 0.18;
-                if terrain == Terrain::Mountain {
-                    density *= 0.10;
-                } else if terrain == Terrain::Highland {
-                    density *= 0.45;
-                }
-                if biome == Biome::Desert || biome == Biome::Volcanic {
-                    density *= 0.15;
-                } else if biome == Biome::Wetland {
-                    density *= 1.18;
-                }
-                if ore.is_some() {
-                    density *= 0.30;
-                }
-                density
+                let td = fbm(fx * 6.0 + 21.0, fy * 6.0 - 13.0, seed ^ 0xE5E5, 3, 2.0, 0.5);
+                let mut d = td * moisture * 1.1;
+                if terrain == Terrain::Highland { d *= 0.5; }
+                if biome == Biome::Desert || biome == Biome::Volcanic { d *= 0.12; }
+                if biome == Biome::Wetland { d *= 1.2; }
+                if ore.is_some() { d *= 0.25; } // less trees on ore patches
+                d.clamp(0.0, 1.0)
             };
 
-            chunks.push(Chunk {
-                terrain,
-                biome,
-                ore,
-                landmark: None,
-                elevation,
-                moisture,
-                heat: temp,
-                tree_density: clamp01(tree_density),
-            });
+            chunks.push(Chunk { terrain, biome, ore, landmark: None, elevation, moisture, heat: temp, tree_density });
         }
     }
 
+    // --- LANDMARKS: one per LANDMARK_REGION x LANDMARK_REGION area ---
     for ry in (0..height).step_by(LANDMARK_REGION as usize) {
         for rx in (0..width).step_by(LANDMARK_REGION as usize) {
             let mut best_idx: Option<usize> = None;
             let mut best_score = 0.0f32;
-            let y_end = (ry + LANDMARK_REGION).min(height);
-            let x_end = (rx + LANDMARK_REGION).min(width);
-            for y in ry..y_end {
-                for x in rx..x_end {
+            for y in ry..(ry + LANDMARK_REGION).min(height) {
+                for x in rx..(rx + LANDMARK_REGION).min(width) {
                     let idx = (y * width + x) as usize;
                     let c = chunks[idx];
-                    if c.terrain == Terrain::Water || c.ore.is_some() {
-                        continue;
-                    }
-                    let marker = fbm(x as f32 * 0.33, y as f32 * 0.33, seed ^ 0xD00D, 2, 2.0, 0.5);
-                    let score = marker * 0.58 + c.elevation * 0.20 + c.moisture * 0.11 + c.heat * 0.11;
-                    if score > best_score {
-                        best_score = score;
-                        best_idx = Some(idx);
-                    }
+                    if c.terrain == Terrain::Water || c.ore.is_some() { continue; }
+                    let marker = fbm(x as f32 * 0.28, y as f32 * 0.28, seed ^ 0xD00D, 2, 2.0, 0.5);
+                    let score = marker * 0.6 + c.elevation * 0.2 + c.moisture * 0.1 + c.heat * 0.1;
+                    if score > best_score { best_score = score; best_idx = Some(idx); }
                 }
             }
-            if let Some(idx) = best_idx.filter(|_| best_score > 0.62) {
+            if let Some(idx) = best_idx.filter(|_| best_score > 0.60) {
                 let c = chunks[idx];
-                let landmark = match c.biome {
-                    Biome::Wetland => Landmark::CrystalLake,
-                    Biome::Volcanic => Landmark::GeothermalVent,
-                    Biome::Desert => Landmark::ImpactCrater,
-                    Biome::Frozen => Landmark::AncientRuins,
-                    Biome::Temperate => {
-                        if c.elevation > 0.7 {
-                            Landmark::AncientRuins
-                        } else {
-                            Landmark::CrystalLake
-                        }
-                    }
-                };
-                chunks[idx].landmark = Some(landmark);
+                chunks[idx].landmark = Some(match c.biome {
+                    Biome::Wetland   => Landmark::CrystalLake,
+                    Biome::Volcanic  => Landmark::GeothermalVent,
+                    Biome::Desert    => Landmark::ImpactCrater,
+                    Biome::Frozen    => Landmark::AncientRuins,
+                    Biome::Temperate => if c.elevation > 0.7 { Landmark::AncientRuins } else { Landmark::CrystalLake },
+                });
             }
         }
     }
@@ -758,27 +732,24 @@ fn world_score(world: &WorldMap) -> f32 {
     let mut coal = 0usize;
     let mut landmarks = 0usize;
     for c in &world.chunks {
-        if c.terrain == Terrain::Water {
-            water += 1;
-        }
+        if c.terrain == Terrain::Water { water += 1; }
         match c.ore {
-            Some(Ore::Iron) => iron += 1,
+            Some(Ore::Iron)   => iron += 1,
             Some(Ore::Copper) => copper += 1,
-            Some(Ore::Coal) => coal += 1,
+            Some(Ore::Coal)   => coal += 1,
             None => {}
         }
-        if c.landmark.is_some() {
-            landmarks += 1;
-        }
+        if c.landmark.is_some() { landmarks += 1; }
     }
     let total = world.chunks.len().max(1) as f32;
     let water_ratio = water as f32 / total;
-    let land_ratio = 1.0 - water_ratio;
-    let mut score = 0.0;
-    score += 1.0 - (water_ratio - 0.40).abs() * 2.2;
-    score += (land_ratio - 0.30).max(0.0) * 0.8;
-    score += ((iron.min(copper).min(coal) as f32) / 180.0).min(1.0) * 1.0;
-    score += ((landmarks as f32) / 18.0).min(1.0) * 0.8;
+    let mut score = 0.0f32;
+    // prefer 15-35% water (lakes+rivers feel)
+    score += 1.0 - (water_ratio - 0.25).abs() * 3.0;
+    // reward good ore spread
+    score += ((iron.min(10) + copper.min(10) + coal.min(10)) as f32 / 30.0).min(1.0) * 1.5;
+    // reward landmarks
+    score += ((landmarks as f32) / 15.0).min(1.0) * 0.8;
     score
 }
 
