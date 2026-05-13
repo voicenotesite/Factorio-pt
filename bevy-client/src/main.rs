@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 
-const WORLD_W: i32 = 96;
-const WORLD_H: i32 = 64;
+const WORLD_W: i32 = 160;
+const WORLD_H: i32 = 104;
 const CHUNK_SIZE: f32 = 56.0;
 const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
@@ -160,6 +160,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 fn player_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    world: Res<WorldMap>,
     mut player_q: Query<&mut Transform, With<Player>>,
     mut cam_q: Query<&mut Projection, With<CameraRig>>,
 ) {
@@ -173,7 +174,21 @@ fn player_movement(
 
     if dir.length_squared() > 0.0 {
         let speed = 220.0 * time.delta_secs();
-        pt.translation += dir.normalize() * speed;
+        let delta = dir.normalize() * speed;
+        let next = pt.translation + delta;
+        // No "Jesus walking": player cannot enter water tiles.
+        if is_walkable(&world, next.truncate()) {
+            pt.translation = next;
+        } else {
+            // Sliding along coast/walls feels better than hard stop.
+            let x_only = Vec3::new(pt.translation.x + delta.x, pt.translation.y, pt.translation.z);
+            let y_only = Vec3::new(pt.translation.x, pt.translation.y + delta.y, pt.translation.z);
+            if is_walkable(&world, x_only.truncate()) {
+                pt.translation = x_only;
+            } else if is_walkable(&world, y_only.truncate()) {
+                pt.translation = y_only;
+            }
+        }
     }
 
     // Zoom Q/E
@@ -402,33 +417,76 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
             }
 
-            // Ore overlay: small dithered texture patches on top (complement to tint blend)
+            // Ore overlay: nugget clusters (avoid placeholder "sticker" look)
             if let Some(ore) = chunk.ore {
-                let ore_tex = match ore {
-                    Ore::Iron   => textures.iron.clone(),
-                    Ore::Copper => textures.copper.clone(),
-                    Ore::Coal   => textures.coal.clone(),
+                let (ore_dark, ore_mid, ore_light) = match ore {
+                    Ore::Iron => (
+                        Color::srgb(0.44, 0.49, 0.56),
+                        Color::srgb(0.65, 0.71, 0.78),
+                        Color::srgb(0.82, 0.86, 0.90),
+                    ),
+                    Ore::Copper => (
+                        Color::srgb(0.47, 0.24, 0.12),
+                        Color::srgb(0.74, 0.38, 0.18),
+                        Color::srgb(0.92, 0.58, 0.28),
+                    ),
+                    Ore::Coal => (
+                        Color::srgb(0.08, 0.08, 0.10),
+                        Color::srgb(0.14, 0.14, 0.17),
+                        Color::srgb(0.24, 0.24, 0.28),
+                    ),
                 };
-                let ore_col = ore_tint(ore);
                 let count = if chunk.ore_richness > 0.72 {
-                    3u32
+                    7u32
                 } else if chunk.ore_richness > 0.44 {
-                    2u32
+                    5u32
                 } else {
-                    1u32
+                    3u32
                 };
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let sc = 0.09 + chunk.ore_richness * 0.13 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.06;
-                    let mut spr = Sprite::from_image(ore_tex.clone());
-                    spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
-                    spr.color = ore_col.with_alpha((0.40 + chunk.ore_richness * 0.36).clamp(0.35, 0.82));
-                    commands.spawn((spr, Transform::from_xyz(
-                        sx + nx * tw * 0.72,
-                        sy + ny * th * 0.72,
-                        z + 0.003 + i as f32 * 0.00005,
-                    )));
+                    let sc = 0.06 + chunk.ore_richness * 0.06 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.04;
+                    let px = sx + nx * tw * 0.66;
+                    let py = sy + ny * th * 0.66;
+                    let w = tw * sc;
+                    let h = th * sc;
+                    commands.spawn((
+                        Sprite::from_color(ore_dark.with_alpha(0.62), Vec2::new(w * 1.15, h * 1.15)),
+                        Transform::from_xyz(px + w * 0.10, py - h * 0.14, z + 0.0029 + i as f32 * 0.00004),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(ore_mid.with_alpha(0.90), Vec2::new(w, h)),
+                        Transform::from_xyz(px, py, z + 0.003 + i as f32 * 0.00004),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(ore_light.with_alpha(0.78), Vec2::new(w * 0.38, h * 0.36)),
+                        Transform::from_xyz(px - w * 0.16, py + h * 0.16, z + 0.0031 + i as f32 * 0.00004),
+                    ));
+                }
+            }
+
+            // Smooth terrain transitions: soft blend strips instead of hard "teleport" borders.
+            if let Some(east) = chunk_at(x + 1, y) {
+                if east.terrain != chunk.terrain && terrain_order(chunk.terrain) < terrain_order(east.terrain) {
+                    let east_tint = biome_tint(east.terrain, east.biome, east.moisture, east.heat);
+                    let blend = mix_color(final_tint, east_tint, 0.50);
+                    let alpha = if chunk.terrain == Terrain::Water || east.terrain == Terrain::Water { 0.22 } else { 0.14 };
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(alpha), Vec2::new(tw * 0.22, th * 0.92)),
+                        Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0022),
+                    ));
+                }
+            }
+            if let Some(south) = chunk_at(x, y - 1) {
+                if south.terrain != chunk.terrain && terrain_order(chunk.terrain) < terrain_order(south.terrain) {
+                    let south_tint = biome_tint(south.terrain, south.biome, south.moisture, south.heat);
+                    let blend = mix_color(final_tint, south_tint, 0.50);
+                    let alpha = if chunk.terrain == Terrain::Water || south.terrain == Terrain::Water { 0.20 } else { 0.12 };
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(alpha), Vec2::new(tw * 0.90, th * 0.20)),
+                        Transform::from_xyz(sx, sy - th * 0.5, z + 0.0021),
+                    ));
                 }
             }
 
@@ -574,6 +632,16 @@ fn ore_tint(ore: Ore) -> Color {
         Ore::Iron   => Color::srgb(0.82, 0.86, 0.90),   // metallic gray-blue
         Ore::Copper => Color::srgb(0.88, 0.52, 0.22),   // distinct orange-brown
         Ore::Coal   => Color::srgb(0.18, 0.18, 0.22),   // near-black
+    }
+}
+
+fn terrain_order(t: Terrain) -> i32 {
+    match t {
+        Terrain::Water => 0,
+        Terrain::Lowland => 1,
+        Terrain::Midland => 2,
+        Terrain::Highland => 3,
+        Terrain::Mountain => 4,
     }
 }
 
@@ -825,9 +893,10 @@ fn runtime_seed() -> u32 {
 }
 
 fn world_offsets(world: &WorldMap) -> (f32, f32) {
+    let th = CHUNK_SIZE * ISO_Y_RATIO;
     (
         -(world.width as f32 * CHUNK_SIZE) * 0.5 + CHUNK_SIZE * 0.5,
-        -(world.height as f32 * CHUNK_SIZE) * 0.5 + CHUNK_SIZE * 0.5,
+        -(world.height as f32 * th) * 0.5 + th * 0.5,
     )
 }
 
@@ -837,11 +906,31 @@ fn project_world_pos(world_x: f32, world_y: f32, _elevation: f32) -> Vec2 {
 
 fn chunk_screen_pos(world: &WorldMap, x: i32, y: i32) -> Vec2 {
     let (ox, oy) = world_offsets(world);
+    let th = CHUNK_SIZE * ISO_Y_RATIO;
     let world_x = ox + x as f32 * CHUNK_SIZE;
-    let world_y = oy + y as f32 * CHUNK_SIZE;
+    let world_y = oy + y as f32 * th;
     let idx = (y * world.width + x) as usize;
     let elevation = world.chunks[idx].elevation;
     project_world_pos(world_x, world_y, elevation)
+}
+
+fn screen_to_chunk(world: &WorldMap, pos: Vec2) -> Option<(i32, i32)> {
+    let (ox, oy) = world_offsets(world);
+    let tw = CHUNK_SIZE;
+    let th = CHUNK_SIZE * ISO_Y_RATIO;
+    let cx = ((pos.x - ox) / tw).round() as i32;
+    let cy = ((pos.y - oy) / th).round() as i32;
+    if cx < 0 || cy < 0 || cx >= world.width || cy >= world.height {
+        None
+    } else {
+        Some((cx, cy))
+    }
+}
+
+fn is_walkable(world: &WorldMap, pos: Vec2) -> bool {
+    let Some((x, y)) = screen_to_chunk(world, pos) else { return false; };
+    let idx = (y * world.width + x) as usize;
+    world.chunks[idx].terrain != Terrain::Water
 }
 
 fn recommended_spawn_point(world: &WorldMap, seed: u32) -> Vec2 {
