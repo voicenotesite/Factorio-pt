@@ -111,17 +111,18 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // Use the clean Factorio-like set; realistic set created heavy visual noise at tile scale.
     let textures = TileTextures {
-        water: asset_server.load("generated/sd_tiles_qhd_realistic/water_1024.png"),
-        lowland: asset_server.load("generated/sd_tiles_qhd_realistic/lowland_1024.png"),
-        midland: asset_server.load("generated/sd_tiles_qhd_realistic/midland_1024.png"),
-        highland: asset_server.load("generated/sd_tiles_qhd_realistic/highland_1024.png"),
-        sand: asset_server.load("generated/sd_tiles_qhd_realistic/sand_1024.png"),
-        stone: asset_server.load("generated/sd_tiles_qhd_realistic/stone_1024.png"),
-        mountain: asset_server.load("generated/sd_tiles_qhd_realistic/mountain_1024.png"),
-        iron: asset_server.load("generated/sd_tiles_qhd_realistic/iron_1024.png"),
-        copper: asset_server.load("generated/sd_tiles_qhd_realistic/copper_1024.png"),
-        coal: asset_server.load("generated/sd_tiles_qhd_realistic/coal_1024.png"),
+        water: asset_server.load("generated/sd_tiles_factorio_clean/water_1024.png"),
+        lowland: asset_server.load("generated/sd_tiles_factorio_clean/lowland_1024.png"),
+        midland: asset_server.load("generated/sd_tiles_factorio_clean/midland_1024.png"),
+        highland: asset_server.load("generated/sd_tiles_factorio_clean/highland_1024.png"),
+        sand: asset_server.load("generated/sd_tiles_factorio_clean/stone_1024.png"),
+        stone: asset_server.load("generated/sd_tiles_factorio_clean/stone_1024.png"),
+        mountain: asset_server.load("generated/sd_tiles_factorio_clean/mountain_1024.png"),
+        iron: asset_server.load("generated/sd_tiles_factorio_clean/iron_1024.png"),
+        copper: asset_server.load("generated/sd_tiles_factorio_clean/copper_1024.png"),
+        coal: asset_server.load("generated/sd_tiles_factorio_clean/coal_1024.png"),
     };
     let (seed, world) = select_good_world(WORLD_W, WORLD_H);
     println!("Generating world seed: {seed} | {}", world_summary(&world));
@@ -142,7 +143,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         Projection::Orthographic(OrthographicProjection {
             near: -5000.0,
             far: 5000.0,
-            scale: 0.35,
+            scale: 0.45,
             ..OrthographicProjection::default_2d()
         }),
         Transform::from_xyz(start.x, start.y, 1000.0),
@@ -325,8 +326,8 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             let sy = offset_y + y as f32 * th;
             let z = y as f32 * 0.01 + chunk.elevation * 0.005;
 
-            // --- BASE TEXTURE with per-tile brightness variation (+/- 7%) ---
-            let var = 0.93 + hash01(x, y, seed ^ 0xF00F) * 0.14;
+            // --- BASE TEXTURE with per-tile brightness variation (+/- 2%) ---
+            let var = 0.98 + hash01(x, y, seed ^ 0xF00F) * 0.04;
             let img = terrain_image(textures, chunk.terrain, chunk.biome);
             let terrain_tint = biome_tint(chunk.terrain, chunk.biome, chunk.moisture, chunk.heat);
 
@@ -361,14 +362,14 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     Ore::Coal   => textures.coal.clone(),
                 };
                 let ore_col = ore_tint(ore);
-                let count = 3u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
+                let count = 1u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let sc = 0.18 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.14;
+                    let sc = 0.14 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.08;
                     let mut spr = Sprite::from_image(ore_tex.clone());
                     spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
-                    spr.color = ore_col.with_alpha(0.88);
+                    spr.color = ore_col.with_alpha(0.68);
                     commands.spawn((spr, Transform::from_xyz(
                         sx + nx * tw * 0.72,
                         sy + ny * th * 0.72,
@@ -409,9 +410,9 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             }
 
             // --- TREES: recognizable canopy dots with highlight ---
-            if chunk.tree_density > 0.55 && chunk.terrain != Terrain::Water {
+            if chunk.tree_density > 0.62 && chunk.terrain != Terrain::Water {
                 let tree_col = tree_color(chunk.biome, chunk.moisture);
-                let count = if chunk.tree_density > 0.78 { 5u32 } else if chunk.tree_density > 0.65 { 3u32 } else { 2u32 };
+                let count = if chunk.tree_density > 0.82 { 3u32 } else if chunk.tree_density > 0.70 { 2u32 } else { 1u32 };
                 for t in 0..count {
                     let hx = hash01(x + t as i32, y,         seed ^ (0xBEEF + t * 7)) - 0.5;
                     let hy = hash01(x, y + t as i32,         seed ^ (0xCAFE + t * 5)) - 0.5;
@@ -422,7 +423,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     let py = sy + hy * th * 0.68;
                     // drop shadow
                     commands.spawn((
-                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.25),
+                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.14),
                             Vec2::new(cw * 1.15, ch * 0.50)),
                         Transform::from_xyz(px + cw * 0.12, py - ch * 0.28, z + 0.0038 + t as f32 * 0.0001),
                     ));
