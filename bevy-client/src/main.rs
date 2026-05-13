@@ -6,6 +6,8 @@ const WORLD_H: i32 = 260;
 const CHUNK_SIZE: f32 = 56.0;
 const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
+const RENDER_RADIUS_X: i32 = 56;
+const RENDER_RADIUS_Y: i32 = 36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Terrain {
@@ -67,6 +69,15 @@ struct CameraRig;
 struct Player;
 
 #[derive(Component)]
+struct PlayerAnim {
+    timer: Timer,
+    frame: usize,
+}
+
+#[derive(Component)]
+struct WorldVisual;
+
+#[derive(Component)]
 struct WaterTile {
     phase: f32,
     depth: f32,
@@ -86,6 +97,17 @@ struct TileTextures {
     copper: Handle<Image>,
     coal: Handle<Image>,
 }
+
+#[derive(Resource)]
+struct WorldSeed(u32);
+
+#[derive(Resource)]
+struct PlayerAnimation {
+    frames: Vec<Handle<Image>>,
+}
+
+#[derive(Resource, Default)]
+struct VisibleCenter(Option<(i32, i32)>);
 
 fn main() {
     App::new()
@@ -109,7 +131,17 @@ fn main() {
         )
         .add_systems(Startup, setup)
         .add_systems(Startup, dither_ore_textures.after(setup))
-        .add_systems(Update, (player_movement, camera_follow, animate_water, pixel_rounding))
+        .add_systems(
+            Update,
+            (
+                player_movement,
+                stream_visible_world.after(player_movement),
+                camera_follow.after(player_movement),
+                animate_player,
+                animate_water,
+                pixel_rounding,
+            ),
+        )
         .run();
 }
 
@@ -127,17 +159,28 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         copper: asset_server.load("generated/sd_tiles_factorio_clean/copper_1024.png"),
         coal: asset_server.load("generated/sd_tiles_factorio_clean/coal_1024.png"),
     };
-    let player_tex: Handle<Image> = asset_server.load("generated/sd_tiles_qhd_realistic/player_1024.png");
+    let player_frames: Vec<Handle<Image>> = (0..8)
+        .map(|i| asset_server.load(format!("generated/player/player_walk_{i:02}.png")))
+        .collect();
     let (seed, world) = select_good_world(WORLD_W, WORLD_H);
     println!("Generating world seed: {seed} | {}", world_summary(&world));
     let start = recommended_spawn_point(&world, seed);
     println!("Camera start: x={:.1} y={:.1}", start.x, start.y);
-    spawn_world(&mut commands, &world, &textures, seed);
+    let start_chunk = screen_to_chunk(&world, start).unwrap_or((world.width / 2, world.height / 2));
+    spawn_world(&mut commands, &world, &textures, seed, start_chunk);
 
-    // Player texture (no placeholder square)
-    let mut player_sprite = Sprite::from_image(player_tex);
+    // Player texture animation (generated sprite frames)
+    let mut player_sprite = Sprite::from_image(player_frames[0].clone());
     player_sprite.custom_size = Some(Vec2::new(CHUNK_SIZE * 0.52, CHUNK_SIZE * ISO_Y_RATIO * 0.90));
-    commands.spawn((player_sprite, Transform::from_xyz(start.x, start.y, 500.0), Player));
+    commands.spawn((
+        player_sprite,
+        Transform::from_xyz(start.x, start.y, 500.0),
+        Player,
+        PlayerAnim {
+            timer: Timer::from_seconds(0.09, TimerMode::Repeating),
+            frame: 0,
+        },
+    ));
 
     commands.spawn((
         Camera2d,
@@ -151,8 +194,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         CameraRig,
     ));
 
+    commands.insert_resource(PlayerAnimation { frames: player_frames });
     commands.insert_resource(textures);
     commands.insert_resource(world);
+    commands.insert_resource(WorldSeed(seed));
+    commands.insert_resource(VisibleCenter(Some(start_chunk)));
 }
 
 fn player_movement(
@@ -240,6 +286,53 @@ fn camera_follow(
     // Smooth follow — lerp camera toward player
     let target = Vec3::new(pt.translation.x, pt.translation.y, ct.translation.z);
     ct.translation = ct.translation.lerp(target, 0.12);
+}
+
+fn animate_player(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    anim_res: Res<PlayerAnimation>,
+    mut q: Query<(&mut Sprite, &mut PlayerAnim), With<Player>>,
+) {
+    let moving =
+        keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::KeyD);
+    let Ok((mut sprite, mut anim)) = q.single_mut() else { return; };
+    if !moving {
+        anim.frame = 0;
+        sprite.image = anim_res.frames[0].clone();
+        anim.timer.reset();
+        return;
+    }
+    anim.timer.tick(time.delta());
+    if anim.timer.just_finished() {
+        anim.frame = (anim.frame + 1) % anim_res.frames.len();
+        sprite.image = anim_res.frames[anim.frame].clone();
+    }
+}
+
+fn stream_visible_world(
+    mut commands: Commands,
+    world: Res<WorldMap>,
+    textures: Res<TileTextures>,
+    seed: Res<WorldSeed>,
+    mut visible: ResMut<VisibleCenter>,
+    player_q: Query<&Transform, With<Player>>,
+    visuals_q: Query<Entity, With<WorldVisual>>,
+) {
+    let Ok(pt) = player_q.single() else { return; };
+    let Some(center) = screen_to_chunk(&world, pt.translation.truncate()) else { return; };
+    let Some(prev) = visible.0 else {
+        visible.0 = Some(center);
+        return;
+    };
+    if (center.0 - prev.0).abs() < 6 && (center.1 - prev.1).abs() < 6 {
+        return;
+    }
+    for e in &visuals_q {
+        commands.entity(e).despawn();
+    }
+    spawn_world(&mut commands, &world, &textures, seed.0, center);
+    visible.0 = Some(center);
 }
 
 /// Snap every transform to whole pixels — eliminates sub-pixel shimmer on all sprites.
@@ -353,7 +446,13 @@ fn animate_water(time: Res<Time>, mut q: Query<(&mut Sprite, &WaterTile)>) {
     }
 }
 
-fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTextures, seed: u32) {
+fn spawn_world(
+    commands: &mut Commands,
+    world: &WorldMap,
+    textures: &TileTextures,
+    seed: u32,
+    center: (i32, i32),
+) {
     let tw = CHUNK_SIZE;
     let th = CHUNK_SIZE * ISO_Y_RATIO;
     let tile_size = Vec2::new(tw, th);
@@ -369,8 +468,13 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
         }
     };
 
-    for y in 0..world.height {
-        for x in 0..world.width {
+    let x_min = (center.0 - RENDER_RADIUS_X).max(0);
+    let x_max = (center.0 + RENDER_RADIUS_X).min(world.width - 1);
+    let y_min = (center.1 - RENDER_RADIUS_Y).max(0);
+    let y_max = (center.1 + RENDER_RADIUS_Y).min(world.height - 1);
+
+    for y in y_min..=y_max {
+        for x in x_min..=x_max {
             let chunk = world.chunks[(y * world.width + x) as usize];
             let sx = offset_x + x as f32 * tw;
             let sy = offset_y + y as f32 * th;
@@ -422,7 +526,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             let mut base = Sprite::from_image(img);
             base.custom_size = Some(tile_size);
             base.color = Color::srgb(tr, tg, tb);
-            let mut ec = commands.spawn((base, Transform::from_xyz(sx, sy, z)));
+            let mut ec = commands.spawn((base, Transform::from_xyz(sx, sy, z), WorldVisual));
             if chunk.terrain == Terrain::Water {
                 ec.insert(WaterTile {
                     phase: hash01(x, y, seed ^ 0x7777) * std::f32::consts::TAU,
@@ -437,6 +541,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                             tile_size,
                         ),
                         Transform::from_xyz(sx, sy, z + 0.0025),
+                        WorldVisual,
                     ));
                 }
             }
@@ -465,6 +570,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                         ),
                     ),
                     Transform::from_xyz(sx, sy, z + 0.0027),
+                    WorldVisual,
                 ));
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
@@ -477,10 +583,11 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     let mut ore_sprite = Sprite::from_image(ore_tex.clone());
                     ore_sprite.custom_size = Some(Vec2::new(w, h));
                     ore_sprite.color = ore_col.with_alpha((0.56 + chunk.ore_richness * 0.28).clamp(0.56, 0.86));
-                    commands.spawn((ore_sprite, Transform::from_xyz(px, py, z + 0.0030 + i as f32 * 0.00004)));
+                    commands.spawn((ore_sprite, Transform::from_xyz(px, py, z + 0.0030 + i as f32 * 0.00004), WorldVisual));
                     commands.spawn((
                         Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.18), Vec2::new(w * 1.08, h * 0.65)),
                         Transform::from_xyz(px + w * 0.10, py - h * 0.14, z + 0.0029 + i as f32 * 0.00004),
+                        WorldVisual,
                     ));
                 }
             }
@@ -494,14 +601,17 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha * 0.50), Vec2::new(tw * 0.44, th * 0.96)),
                         Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0020),
+                        WorldVisual,
                     ));
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha * 0.75), Vec2::new(tw * 0.28, th * 0.94)),
                         Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0021),
+                        WorldVisual,
                     ));
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.14, th * 0.90)),
                         Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0022),
+                        WorldVisual,
                     ));
                 }
             }
@@ -513,14 +623,17 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha * 0.45), Vec2::new(tw * 0.95, th * 0.36)),
                         Transform::from_xyz(sx, sy - th * 0.5, z + 0.0020),
+                        WorldVisual,
                     ));
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha * 0.70), Vec2::new(tw * 0.93, th * 0.24)),
                         Transform::from_xyz(sx, sy - th * 0.5, z + 0.0021),
+                        WorldVisual,
                     ));
                     commands.spawn((
                         Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.90, th * 0.14)),
                         Transform::from_xyz(sx, sy - th * 0.5, z + 0.0022),
+                        WorldVisual,
                     ));
                 }
             }
@@ -531,6 +644,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 commands.spawn((
                     Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, shade_a), tile_size),
                     Transform::from_xyz(sx, sy, z + 0.001),
+                    WorldVisual,
                 ));
             }
 
@@ -544,6 +658,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                             Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, a),
                                 Vec2::new(tw, 3.0)),
                             Transform::from_xyz(sx, sy - th * 0.5 - 1.5, z + 0.002),
+                            WorldVisual,
                         ));
                     }
                 }
@@ -552,6 +667,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                         Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.20),
                             Vec2::new(tw, 1.5)),
                         Transform::from_xyz(sx, sy - th * 0.5 - 0.5, z + 0.0018),
+                        WorldVisual,
                     ));
                 }
             }
@@ -573,11 +689,13 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                         Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.14),
                             Vec2::new(cw * 1.15, ch * 0.50)),
                         Transform::from_xyz(px + cw * 0.12, py - ch * 0.28, z + 0.0038 + t as f32 * 0.0001),
+                        WorldVisual,
                     ));
                     // canopy
                     commands.spawn((
                         Sprite::from_color(tree_col, Vec2::new(cw, ch)),
                         Transform::from_xyz(px, py, z + 0.004 + t as f32 * 0.0001),
+                        WorldVisual,
                     ));
                     // highlight
                     let tc = tree_col.to_srgba();
@@ -590,6 +708,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     commands.spawn((
                         Sprite::from_color(hcol, Vec2::new(cw * 0.45, ch * 0.45)),
                         Transform::from_xyz(px - cw * 0.08, py + ch * 0.12, z + 0.0041 + t as f32 * 0.0001),
+                        WorldVisual,
                     ));
                 }
             }
@@ -697,15 +816,6 @@ fn tree_color(biome: Biome, moisture: f32) -> Color {
         Biome::Volcanic  => Color::srgb(0.35, 0.30, 0.22),
         Biome::Wetland   => Color::srgb(0.18, g + 0.08, 0.22),
         Biome::Temperate => Color::srgb(0.20, g,        0.18),
-    }
-}
-
-fn landmark_colors(lm: Landmark) -> (Color, Color) {
-    match lm {
-        Landmark::CrystalLake    => (Color::srgb(0.20, 0.80, 1.00), Color::srgb(0.30, 0.70, 0.90)),
-        Landmark::AncientRuins   => (Color::srgb(0.90, 0.84, 0.60), Color::srgb(0.70, 0.65, 0.45)),
-        Landmark::GeothermalVent => (Color::srgb(1.00, 0.40, 0.15), Color::srgb(0.80, 0.30, 0.10)),
-        Landmark::ImpactCrater   => (Color::srgb(0.60, 0.55, 0.52), Color::srgb(0.45, 0.42, 0.40)),
     }
 }
 
