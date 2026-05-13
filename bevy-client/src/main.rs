@@ -4,10 +4,7 @@ use bevy::window::WindowResolution;
 const WORLD_W: i32 = 96;
 const WORLD_H: i32 = 64;
 const CHUNK_SIZE: f32 = 56.0;
-const DRAW_SIZE: f32 = 56.8;
-// 2.5D: tiles sit on a flat grid; elevation only shifts depth/shade, NOT position.
-const ISO_Y_RATIO: f32 = 0.60;   // screen-Y shrink for the iso look (height of tile vs width)
-const BASE_SEED: u32 = 0xBEE5_2026;
+const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,7 +105,8 @@ fn main() {
                 }),
         )
         .add_systems(Startup, setup)
-        .add_systems(Update, (player_movement, camera_follow, animate_water, pixel_snap_camera))
+        .add_systems(Startup, dither_ore_textures.after(setup))
+        .add_systems(Update, (player_movement, camera_follow, animate_water, pixel_rounding))
         .run();
 }
 
@@ -201,13 +199,97 @@ fn camera_follow(
     ct.translation = ct.translation.lerp(target, 0.12);
 }
 
-fn pixel_snap_camera(
-    mut cam_q: Query<&mut Transform, With<CameraRig>>,
+/// Snap every transform to whole pixels — eliminates sub-pixel shimmer on all sprites.
+fn pixel_rounding(mut q: Query<&mut Transform>) {
+    for mut t in &mut q {
+        t.translation.x = t.translation.x.round();
+        t.translation.y = t.translation.y.round();
+    }
+}
+
+/// Apply NeuQuant palette reduction (12 colors) + Floyd-Steinberg dithering
+/// to ore textures at startup so they look like clean pixel art.
+fn dither_ore_textures(
+    textures: Res<TileTextures>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    // Snap camera to whole pixels to eliminate sub-pixel shimmer
-    if let Ok(mut ct) = cam_q.single_mut() {
-        ct.translation.x = ct.translation.x.round();
-        ct.translation.y = ct.translation.y.round();
+    for handle in [&textures.iron, &textures.copper, &textures.coal] {
+        if let Some(img) = images.get_mut(handle) {
+            dither_image(img, 12);
+        }
+    }
+}
+
+fn dither_image(img: &mut Image, n_colors: usize) {
+    use color_quant::NeuQuant;
+
+    let w = img.width() as usize;
+    let h = img.height() as usize;
+    if w == 0 || h == 0 { return; }
+
+    // Bevy 0.18: img.data is Option<Vec<u8>>
+    let data = match img.data.as_mut() {
+        Some(d) => d,
+        None => return,
+    };
+    if data.len() != w * h * 4 { return; }
+
+    let nq = NeuQuant::new(10, n_colors, data.as_slice());
+
+    let mut buf: Vec<[f32; 4]> = data
+        .chunks_exact(4)
+        .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32])
+        .collect();
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let old = buf[idx];
+            let qi = nq.index_of(&[old[0] as u8, old[1] as u8, old[2] as u8, old[3] as u8]);
+            let palette = nq.color_map_rgba();
+            let pi = qi * 4;
+            let new_c = [
+                palette[pi]     as f32,
+                palette[pi + 1] as f32,
+                palette[pi + 2] as f32,
+                old[3],
+            ];
+            buf[idx] = new_c;
+
+            let err = [
+                old[0] - new_c[0],
+                old[1] - new_c[1],
+                old[2] - new_c[2],
+                0.0_f32,
+            ];
+            if x + 1 < w {
+                let nb = &mut buf[y * w + x + 1];
+                for c in 0..3 { nb[c] = (nb[c] + err[c] * 7.0 / 16.0).clamp(0.0, 255.0); }
+            }
+            if y + 1 < h {
+                if x > 0 {
+                    let nb = &mut buf[(y+1) * w + x - 1];
+                    for c in 0..3 { nb[c] = (nb[c] + err[c] * 3.0 / 16.0).clamp(0.0, 255.0); }
+                }
+                {
+                    let nb = &mut buf[(y+1) * w + x];
+                    for c in 0..3 { nb[c] = (nb[c] + err[c] * 5.0 / 16.0).clamp(0.0, 255.0); }
+                }
+                if x + 1 < w {
+                    let nb = &mut buf[(y+1) * w + x + 1];
+                    for c in 0..3 { nb[c] = (nb[c] + err[c] * 1.0 / 16.0).clamp(0.0, 255.0); }
+                }
+            }
+        }
+    }
+
+    // Write back into img.data
+    let data = img.data.as_mut().unwrap();
+    for (i, px) in buf.iter().enumerate() {
+        data[i * 4]     = px[0] as u8;
+        data[i * 4 + 1] = px[1] as u8;
+        data[i * 4 + 2] = px[2] as u8;
+        data[i * 4 + 3] = px[3] as u8;
     }
 }
 
@@ -246,10 +328,21 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             // --- BASE TEXTURE with per-tile brightness variation (+/- 7%) ---
             let var = 0.93 + hash01(x, y, seed ^ 0xF00F) * 0.14;
             let img = terrain_image(textures, chunk.terrain, chunk.biome);
-            let tint = biome_tint(chunk.terrain, chunk.biome, chunk.moisture, chunk.heat);
-            let tr = (tint.to_srgba().red   * var).min(1.0);
-            let tg = (tint.to_srgba().green * var).min(1.0);
-            let tb = (tint.to_srgba().blue  * var).min(1.0);
+            let terrain_tint = biome_tint(chunk.terrain, chunk.biome, chunk.moisture, chunk.heat);
+
+            // ApplyOreMask: blend ore color INTO terrain tint (no separate z-fighting sprites)
+            // strength varies per tile for natural patchiness
+            let final_tint = if let Some(ore) = chunk.ore {
+                let ore_col = ore_tint(ore);
+                let strength = 0.38 + hash01(x + 5, y + 5, seed ^ 0xBAD0) * 0.28; // 0.38–0.66
+                mix_color(terrain_tint, ore_col, strength)
+            } else {
+                terrain_tint
+            };
+
+            let tr = (final_tint.to_srgba().red   * var).min(1.0);
+            let tg = (final_tint.to_srgba().green * var).min(1.0);
+            let tb = (final_tint.to_srgba().blue  * var).min(1.0);
             let mut base = Sprite::from_image(img);
             base.custom_size = Some(tile_size);
             base.color = Color::srgb(tr, tg, tb);
@@ -260,7 +353,31 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 });
             }
 
-            // --- ELEVATION SHADE (subtle, only low terrain) ---
+            // Ore overlay: small dithered texture patches on top (complement to tint blend)
+            if let Some(ore) = chunk.ore {
+                let ore_tex = match ore {
+                    Ore::Iron   => textures.iron.clone(),
+                    Ore::Copper => textures.copper.clone(),
+                    Ore::Coal   => textures.coal.clone(),
+                };
+                let ore_col = ore_tint(ore);
+                let count = 3u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
+                for i in 0..count {
+                    let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
+                    let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
+                    let sc = 0.18 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.14;
+                    let mut spr = Sprite::from_image(ore_tex.clone());
+                    spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
+                    spr.color = ore_col.with_alpha(0.88);
+                    commands.spawn((spr, Transform::from_xyz(
+                        sx + nx * tw * 0.72,
+                        sy + ny * th * 0.72,
+                        z + 0.003 + i as f32 * 0.00005,
+                    )));
+                }
+            }
+
+            // --- ELEVATION SHADE (subtle) ---
             if chunk.terrain != Terrain::Water && chunk.elevation < 0.35 {
                 let shade_a = (0.35 - chunk.elevation) * 0.22;
                 commands.spawn((
@@ -269,7 +386,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 ));
             }
 
-            // --- CLIFF SHADOW + thin terrain-border line ---
+            // --- CLIFF SHADOW + terrain border ---
             if chunk.terrain != Terrain::Water {
                 if let Some(south) = chunk_at(x, y - 1) {
                     let drop = chunk.elevation - south.elevation;
@@ -284,34 +401,10 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
                 if chunk_at(x, y - 1).map(|c| c.terrain) != Some(chunk.terrain) {
                     commands.spawn((
-                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.22),
+                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.20),
                             Vec2::new(tw, 1.5)),
                         Transform::from_xyz(sx, sy - th * 0.5 - 0.5, z + 0.0018),
                     ));
-                }
-            }
-
-            // --- ORE PATCHES: Factorio-style dense nugget clusters ---
-            if let Some(ore) = chunk.ore {
-                let ore_tex = match ore {
-                    Ore::Iron   => textures.iron.clone(),
-                    Ore::Copper => textures.copper.clone(),
-                    Ore::Coal   => textures.coal.clone(),
-                };
-                let ore_col = ore_tint(ore);
-                let count = 5u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
-                for i in 0..count {
-                    let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
-                    let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let sc = 0.20 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.18;
-                    let mut spr = Sprite::from_image(ore_tex.clone());
-                    spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
-                    spr.color = ore_col.with_alpha(0.95);
-                    commands.spawn((spr, Transform::from_xyz(
-                        sx + nx * tw * 0.75,
-                        sy + ny * th * 0.75,
-                        z + 0.003 + i as f32 * 0.00005,
-                    )));
                 }
             }
 
@@ -427,6 +520,18 @@ fn ore_tint(ore: Ore) -> Color {
         Ore::Copper => Color::srgb(0.88, 0.52, 0.22),   // distinct orange-brown
         Ore::Coal   => Color::srgb(0.18, 0.18, 0.22),   // near-black
     }
+}
+
+/// Linear blend: Mix(base, ore, strength) — same as Color Mix() from C# pseudocode
+fn mix_color(base: Color, overlay: Color, strength: f32) -> Color {
+    let b = base.to_srgba();
+    let o = overlay.to_srgba();
+    let s = strength.clamp(0.0, 1.0);
+    Color::srgb(
+        (b.red   * (1.0 - s) + o.red   * s).min(1.0),
+        (b.green * (1.0 - s) + o.green * s).min(1.0),
+        (b.blue  * (1.0 - s) + o.blue  * s).min(1.0),
+    )
 }
 
 fn tree_color(biome: Biome, moisture: f32) -> Color {
@@ -634,13 +739,7 @@ fn clamp01(v: f32) -> f32 {
 
 
 fn runtime_seed() -> u32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0xA11CE55E);
-    let mixed = nanos ^ (nanos >> 33) ^ ((WORLD_W as u64) << 17) ^ ((WORLD_H as u64) << 5);
-    (mixed as u32).wrapping_mul(1664525).wrapping_add(1013904223) ^ BASE_SEED
+    rand::random::<u32>()
 }
 
 fn world_offsets(world: &WorldMap) -> (f32, f32) {
