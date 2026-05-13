@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 
-const WORLD_W: i32 = 160;
-const WORLD_H: i32 = 104;
+const WORLD_W: i32 = 220;
+const WORLD_H: i32 = 140;
 const CHUNK_SIZE: f32 = 56.0;
 const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
@@ -163,6 +163,7 @@ fn player_movement(
     world: Res<WorldMap>,
     mut player_q: Query<&mut Transform, With<Player>>,
     mut cam_q: Query<&mut Projection, With<CameraRig>>,
+    mut cam_tr_q: Query<&mut Transform, (With<CameraRig>, Without<Player>)>,
 ) {
     let Ok(mut pt) = player_q.single_mut() else { return; };
 
@@ -187,6 +188,31 @@ fn player_movement(
                 pt.translation = x_only;
             } else if is_walkable(&world, y_only.truncate()) {
                 pt.translation = y_only;
+            }
+        }
+
+        // Endless traversal illusion: wrap position at world edges.
+        let (min_x, max_x, min_y, max_y) = world_bounds(&world);
+        let mut wrap_dx = 0.0;
+        let mut wrap_dy = 0.0;
+        if pt.translation.x < min_x {
+            wrap_dx = max_x - min_x;
+            pt.translation.x += wrap_dx;
+        } else if pt.translation.x > max_x {
+            wrap_dx = min_x - max_x;
+            pt.translation.x += wrap_dx;
+        }
+        if pt.translation.y < min_y {
+            wrap_dy = max_y - min_y;
+            pt.translation.y += wrap_dy;
+        } else if pt.translation.y > max_y {
+            wrap_dy = min_y - max_y;
+            pt.translation.y += wrap_dy;
+        }
+        if wrap_dx != 0.0 || wrap_dy != 0.0 {
+            if let Ok(mut cam_t) = cam_tr_q.single_mut() {
+                cam_t.translation.x += wrap_dx;
+                cam_t.translation.y += wrap_dy;
             }
         }
     }
@@ -417,7 +443,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
             }
 
-            // Ore overlay: nugget clusters (avoid placeholder "sticker" look)
+            // Ore overlay: nugget clusters + soft ore stain (avoid placeholder "sticker" look)
             if let Some(ore) = chunk.ore {
                 let (ore_dark, ore_mid, ore_light) = match ore {
                     Ore::Iron => (
@@ -443,6 +469,17 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 } else {
                     3u32
                 };
+                let ore_col = ore_tint(ore);
+                commands.spawn((
+                    Sprite::from_color(
+                        ore_col.with_alpha((0.12 + chunk.ore_richness * 0.18).clamp(0.12, 0.30)),
+                        Vec2::new(
+                            tw * (0.36 + chunk.ore_richness * 0.28),
+                            th * (0.34 + chunk.ore_richness * 0.26),
+                        ),
+                    ),
+                    Transform::from_xyz(sx, sy, z + 0.0027),
+                ));
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
@@ -466,14 +503,22 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
             }
 
-            // Smooth terrain transitions: soft blend strips instead of hard "teleport" borders.
+            // Smooth terrain transitions: multilayer blend strips instead of hard "teleport" borders.
             if let Some(east) = chunk_at(x + 1, y) {
                 if east.terrain != chunk.terrain && terrain_order(chunk.terrain) < terrain_order(east.terrain) {
                     let east_tint = biome_tint(east.terrain, east.biome, east.moisture, east.heat);
                     let blend = mix_color(final_tint, east_tint, 0.50);
-                    let alpha = if chunk.terrain == Terrain::Water || east.terrain == Terrain::Water { 0.22 } else { 0.14 };
+                    let base_alpha = if chunk.terrain == Terrain::Water || east.terrain == Terrain::Water { 0.12 } else { 0.08 };
                     commands.spawn((
-                        Sprite::from_color(blend.with_alpha(alpha), Vec2::new(tw * 0.22, th * 0.92)),
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.50), Vec2::new(tw * 0.44, th * 0.96)),
+                        Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0020),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.75), Vec2::new(tw * 0.28, th * 0.94)),
+                        Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0021),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.14, th * 0.90)),
                         Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0022),
                     ));
                 }
@@ -482,10 +527,18 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 if south.terrain != chunk.terrain && terrain_order(chunk.terrain) < terrain_order(south.terrain) {
                     let south_tint = biome_tint(south.terrain, south.biome, south.moisture, south.heat);
                     let blend = mix_color(final_tint, south_tint, 0.50);
-                    let alpha = if chunk.terrain == Terrain::Water || south.terrain == Terrain::Water { 0.20 } else { 0.12 };
+                    let base_alpha = if chunk.terrain == Terrain::Water || south.terrain == Terrain::Water { 0.11 } else { 0.07 };
                     commands.spawn((
-                        Sprite::from_color(blend.with_alpha(alpha), Vec2::new(tw * 0.90, th * 0.20)),
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.45), Vec2::new(tw * 0.95, th * 0.36)),
+                        Transform::from_xyz(sx, sy - th * 0.5, z + 0.0020),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.70), Vec2::new(tw * 0.93, th * 0.24)),
                         Transform::from_xyz(sx, sy - th * 0.5, z + 0.0021),
+                    ));
+                    commands.spawn((
+                        Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.90, th * 0.14)),
+                        Transform::from_xyz(sx, sy - th * 0.5, z + 0.0022),
                     ));
                 }
             }
@@ -735,39 +788,42 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
                 Biome::Temperate
             };
 
-            // --- ORES: Factorio-style round patches ---
+            // --- ORES: Factorio-style deposits with macro + micro structure ---
             let (ore, ore_richness) = if terrain == Terrain::Water || terrain == Terrain::Mountain {
                 (None, 0.0)
             } else {
-                // Each ore type has a patch noise — high value = dense patch center
-                let iron_n   = fbm(fx * 9.5 + 3.1,  fy * 9.5 - 1.7, seed ^ 0xA110, 2, 2.0, 0.5);
-                let copper_n = fbm(fx * 8.0 - 7.3,  fy * 8.0 + 4.2, seed ^ 0xB220, 2, 2.0, 0.5);
-                let coal_n   = fbm(fx * 10.5 + 11.0, fy * 10.5 - 8.0, seed ^ 0xC330, 2, 2.0, 0.5);
+                // macro controls big fields, micro carves patch edges/details
+                let iron_macro   = fbm(fx * 3.2 + 1.7, fy * 3.2 - 0.8, seed ^ 0xA100, 3, 2.0, 0.55);
+                let copper_macro = fbm(fx * 3.0 - 2.8, fy * 3.0 + 1.5, seed ^ 0xB200, 3, 2.0, 0.55);
+                let coal_macro   = fbm(fx * 3.5 + 4.4, fy * 3.5 - 2.3, seed ^ 0xC300, 3, 2.0, 0.55);
+                let iron_micro   = fbm(fx * 10.5 + 3.1,  fy * 10.5 - 1.7, seed ^ 0xA110, 2, 2.0, 0.5);
+                let copper_micro = fbm(fx * 9.2 - 7.3,   fy * 9.2 + 4.2, seed ^ 0xB220, 2, 2.0, 0.5);
+                let coal_micro   = fbm(fx * 11.0 + 11.0, fy * 11.0 - 8.0, seed ^ 0xC330, 2, 2.0, 0.5);
 
                 // Bias based on terrain/biome to give Factorio-like distribution
-                let iron_score = iron_n
+                let iron_score = iron_macro * 0.72 + iron_micro * 0.28
                     + if terrain == Terrain::Highland { 0.10 } else { 0.0 }
                     + if biome == Biome::Frozen { 0.06 } else { 0.0 };
-                let copper_score = copper_n
+                let copper_score = copper_macro * 0.72 + copper_micro * 0.28
                     + if biome == Biome::Desert || biome == Biome::Volcanic { 0.10 } else { 0.0 };
-                let coal_score = coal_n
+                let coal_score = coal_macro * 0.72 + coal_micro * 0.28
                     + if moisture > 0.55 { 0.08 } else { 0.0 };
 
-                let threshold = 0.84; // tight threshold = small dense patches like Factorio
+                let threshold = 0.76;
                 if iron_score > threshold && iron_score >= copper_score && iron_score >= coal_score {
                     (
                         Some(Ore::Iron),
-                        ((iron_score - threshold) / 0.26).clamp(0.0, 1.0),
+                        ((iron_score - threshold) / 0.30).clamp(0.0, 1.0),
                     )
                 } else if copper_score > threshold && copper_score >= coal_score {
                     (
                         Some(Ore::Copper),
-                        ((copper_score - threshold) / 0.26).clamp(0.0, 1.0),
+                        ((copper_score - threshold) / 0.30).clamp(0.0, 1.0),
                     )
                 } else if coal_score > threshold {
                     (
                         Some(Ore::Coal),
-                        ((coal_score - threshold) / 0.26).clamp(0.0, 1.0),
+                        ((coal_score - threshold) / 0.30).clamp(0.0, 1.0),
                     )
                 } else {
                     (None, 0.0)
@@ -931,6 +987,17 @@ fn is_walkable(world: &WorldMap, pos: Vec2) -> bool {
     let Some((x, y)) = screen_to_chunk(world, pos) else { return false; };
     let idx = (y * world.width + x) as usize;
     world.chunks[idx].terrain != Terrain::Water
+}
+
+fn world_bounds(world: &WorldMap) -> (f32, f32, f32, f32) {
+    let (ox, oy) = world_offsets(world);
+    let tw = CHUNK_SIZE;
+    let th = CHUNK_SIZE * ISO_Y_RATIO;
+    let min_x = ox - tw * 0.5;
+    let max_x = ox + (world.width as f32 - 0.5) * tw;
+    let min_y = oy - th * 0.5;
+    let max_y = oy + (world.height as f32 - 0.5) * th;
+    (min_x, max_x, min_y, max_y)
 }
 
 fn recommended_spawn_point(world: &WorldMap, seed: u32) -> Vec2 {
