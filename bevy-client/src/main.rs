@@ -45,6 +45,7 @@ struct Chunk {
     terrain: Terrain,
     biome: Biome,
     ore: Option<Ore>,
+    ore_richness: f32,
     landmark: Option<Landmark>,
     elevation: f32,
     moisture: f32,
@@ -68,6 +69,8 @@ struct Player;
 #[derive(Component)]
 struct WaterTile {
     phase: f32,
+    depth: f32,
+    shore: f32,
 }
 
 #[derive(Resource)]
@@ -297,9 +300,17 @@ fn dither_image(img: &mut Image, n_colors: usize) {
 fn animate_water(time: Res<Time>, mut q: Query<(&mut Sprite, &WaterTile)>) {
     let t = time.elapsed_secs();
     for (mut sprite, water) in &mut q {
-        // Subtle shimmer — tint stays close to neutral so texture shows through
-        let wave = (t * 1.4 + water.phase).sin() * 0.04;
-        sprite.color = Color::srgba(0.80 + wave, 0.92 + wave * 0.5, 1.0, 0.88);
+        let base = water_color(water.depth, water.shore * 0.5).to_srgba();
+        let wave_a = (t * 1.6 + water.phase).sin();
+        let wave_b = (t * 2.7 + water.phase * 0.61).cos();
+        let shimmer = (wave_a * 0.020 + wave_b * 0.012) * (0.45 + water.depth * 0.55);
+        let foam = water.shore * (0.04 + ((t * 2.2 + water.phase * 1.3).sin() * 0.5 + 0.5) * 0.06);
+        sprite.color = Color::srgba(
+            (base.red + shimmer + foam).clamp(0.0, 1.0),
+            (base.green + shimmer * 0.7 + foam * 0.9).clamp(0.0, 1.0),
+            (base.blue + shimmer * 0.4 + foam * 0.6).clamp(0.0, 1.0),
+            (0.88 + water.shore * 0.05).clamp(0.0, 1.0),
+        );
     }
 }
 
@@ -326,16 +337,41 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             let sy = offset_y + y as f32 * th;
             let z = y as f32 * 0.01 + chunk.elevation * 0.005;
 
-            // --- BASE TEXTURE with per-tile brightness variation (+/- 2%) ---
-            let var = 0.98 + hash01(x, y, seed ^ 0xF00F) * 0.04;
+            let mut shore = 0.0;
+            let mut depth = 0.0;
+            if chunk.terrain == Terrain::Water {
+                let mut land_neighbors = 0.0;
+                let mut total_neighbors = 0.0;
+                for oy in -1..=1 {
+                    for ox in -1..=1 {
+                        if ox == 0 && oy == 0 { continue; }
+                        total_neighbors += 1.0;
+                        if chunk_at(x + ox, y + oy).map(|c| c.terrain) != Some(Terrain::Water) {
+                            land_neighbors += 1.0;
+                        }
+                    }
+                }
+                shore = if total_neighbors > 0.0 { land_neighbors / total_neighbors } else { 0.0 };
+                depth = ((0.38 - chunk.elevation) / 0.38).clamp(0.0, 1.0);
+            }
+
+            // --- BASE TEXTURE with per-tile brightness variation ---
+            let var = if chunk.terrain == Terrain::Water {
+                0.99 + hash01(x, y, seed ^ 0xF00F) * 0.02
+            } else {
+                0.98 + hash01(x, y, seed ^ 0xF00F) * 0.04
+            };
             let img = terrain_image(textures, chunk.terrain, chunk.biome);
             let terrain_tint = biome_tint(chunk.terrain, chunk.biome, chunk.moisture, chunk.heat);
 
             // ApplyOreMask: blend ore color INTO terrain tint (no separate z-fighting sprites)
             // strength varies per tile for natural patchiness
-            let final_tint = if let Some(ore) = chunk.ore {
+            let final_tint = if chunk.terrain == Terrain::Water {
+                water_color(depth, shore)
+            } else if let Some(ore) = chunk.ore {
                 let ore_col = ore_tint(ore);
-                let strength = 0.38 + hash01(x + 5, y + 5, seed ^ 0xBAD0) * 0.28; // 0.38–0.66
+                let jitter = hash01(x + 5, y + 5, seed ^ 0xBAD0);
+                let strength = (0.20 + chunk.ore_richness * 0.45 + jitter * 0.12).clamp(0.18, 0.74);
                 mix_color(terrain_tint, ore_col, strength)
             } else {
                 terrain_tint
@@ -351,7 +387,19 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
             if chunk.terrain == Terrain::Water {
                 ec.insert(WaterTile {
                     phase: hash01(x, y, seed ^ 0x7777) * std::f32::consts::TAU,
+                    depth,
+                    shore,
                 });
+                if shore > 0.05 {
+                    // soft shoreline foam for better land/water readability
+                    commands.spawn((
+                        Sprite::from_color(
+                            Color::srgba(0.86, 0.92, 0.95, (0.05 + shore * 0.16).clamp(0.0, 0.22)),
+                            tile_size,
+                        ),
+                        Transform::from_xyz(sx, sy, z + 0.0025),
+                    ));
+                }
             }
 
             // Ore overlay: small dithered texture patches on top (complement to tint blend)
@@ -362,14 +410,20 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                     Ore::Coal   => textures.coal.clone(),
                 };
                 let ore_col = ore_tint(ore);
-                let count = 1u32 + (hash01(x, y, seed ^ 0xAB01) * 2.0) as u32;
+                let count = if chunk.ore_richness > 0.72 {
+                    3u32
+                } else if chunk.ore_richness > 0.44 {
+                    2u32
+                } else {
+                    1u32
+                };
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let sc = 0.14 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.08;
+                    let sc = 0.09 + chunk.ore_richness * 0.13 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.06;
                     let mut spr = Sprite::from_image(ore_tex.clone());
                     spr.custom_size = Some(Vec2::new(tw * sc, th * sc));
-                    spr.color = ore_col.with_alpha(0.68);
+                    spr.color = ore_col.with_alpha((0.40 + chunk.ore_richness * 0.36).clamp(0.35, 0.82));
                     commands.spawn((spr, Transform::from_xyz(
                         sx + nx * tw * 0.72,
                         sy + ny * th * 0.72,
@@ -523,6 +577,14 @@ fn ore_tint(ore: Ore) -> Color {
     }
 }
 
+fn water_color(depth: f32, shore: f32) -> Color {
+    let shallow = Color::srgb(0.17, 0.43, 0.58);
+    let deep = Color::srgb(0.05, 0.20, 0.35);
+    let shore_tint = Color::srgb(0.34, 0.56, 0.60);
+    let base = mix_color(shallow, deep, depth.clamp(0.0, 1.0));
+    mix_color(base, shore_tint, (shore * 0.35).clamp(0.0, 0.35))
+}
+
 /// Linear blend: Mix(base, ore, strength) — same as Color Mix() from C# pseudocode
 fn mix_color(base: Color, overlay: Color, strength: f32) -> Color {
     let b = base.to_srgba();
@@ -606,8 +668,8 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
             };
 
             // --- ORES: Factorio-style round patches ---
-            let ore = if terrain == Terrain::Water || terrain == Terrain::Mountain {
-                None
+            let (ore, ore_richness) = if terrain == Terrain::Water || terrain == Terrain::Mountain {
+                (None, 0.0)
             } else {
                 // Each ore type has a patch noise — high value = dense patch center
                 let iron_n   = fbm(fx * 9.5 + 3.1,  fy * 9.5 - 1.7, seed ^ 0xA110, 2, 2.0, 0.5);
@@ -625,13 +687,22 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
 
                 let threshold = 0.84; // tight threshold = small dense patches like Factorio
                 if iron_score > threshold && iron_score >= copper_score && iron_score >= coal_score {
-                    Some(Ore::Iron)
+                    (
+                        Some(Ore::Iron),
+                        ((iron_score - threshold) / 0.26).clamp(0.0, 1.0),
+                    )
                 } else if copper_score > threshold && copper_score >= coal_score {
-                    Some(Ore::Copper)
+                    (
+                        Some(Ore::Copper),
+                        ((copper_score - threshold) / 0.26).clamp(0.0, 1.0),
+                    )
                 } else if coal_score > threshold {
-                    Some(Ore::Coal)
+                    (
+                        Some(Ore::Coal),
+                        ((coal_score - threshold) / 0.26).clamp(0.0, 1.0),
+                    )
                 } else {
-                    None
+                    (None, 0.0)
                 }
             };
 
@@ -648,7 +719,17 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
                 d.clamp(0.0, 1.0)
             };
 
-            chunks.push(Chunk { terrain, biome, ore, landmark: None, elevation, moisture, heat: temp, tree_density });
+            chunks.push(Chunk {
+                terrain,
+                biome,
+                ore,
+                ore_richness,
+                landmark: None,
+                elevation,
+                moisture,
+                heat: temp,
+                tree_density,
+            });
         }
     }
 
