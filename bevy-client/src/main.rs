@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 
-const WORLD_W: i32 = 220;
-const WORLD_H: i32 = 140;
+const WORLD_W: i32 = 420;
+const WORLD_H: i32 = 260;
 const CHUNK_SIZE: f32 = 56.0;
 const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
@@ -127,19 +127,17 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         copper: asset_server.load("generated/sd_tiles_factorio_clean/copper_1024.png"),
         coal: asset_server.load("generated/sd_tiles_factorio_clean/coal_1024.png"),
     };
+    let player_tex: Handle<Image> = asset_server.load("generated/sd_tiles_qhd_realistic/player_1024.png");
     let (seed, world) = select_good_world(WORLD_W, WORLD_H);
     println!("Generating world seed: {seed} | {}", world_summary(&world));
     let start = recommended_spawn_point(&world, seed);
     println!("Camera start: x={:.1} y={:.1}", start.x, start.y);
     spawn_world(&mut commands, &world, &textures, seed);
 
-    // Player — bright yellow square with black border, clearly visible on any terrain
-    let pr = CHUNK_SIZE * 0.40;
-    commands.spawn((
-        Sprite::from_color(Color::srgb(1.0, 0.88, 0.10), Vec2::new(pr, pr)),
-        Transform::from_xyz(start.x, start.y, 500.0),
-        Player,
-    ));
+    // Player texture (no placeholder square)
+    let mut player_sprite = Sprite::from_image(player_tex);
+    player_sprite.custom_size = Some(Vec2::new(CHUNK_SIZE * 0.52, CHUNK_SIZE * ISO_Y_RATIO * 0.90));
+    commands.spawn((player_sprite, Transform::from_xyz(start.x, start.y, 500.0), Player));
 
     commands.spawn((
         Camera2d,
@@ -443,31 +441,19 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
             }
 
-            // Ore overlay: nugget clusters + soft ore stain (avoid placeholder "sticker" look)
+            // Ore overlay: textured ore clumps (no placeholder primitives)
             if let Some(ore) = chunk.ore {
-                let (ore_dark, ore_mid, ore_light) = match ore {
-                    Ore::Iron => (
-                        Color::srgb(0.44, 0.49, 0.56),
-                        Color::srgb(0.65, 0.71, 0.78),
-                        Color::srgb(0.82, 0.86, 0.90),
-                    ),
-                    Ore::Copper => (
-                        Color::srgb(0.47, 0.24, 0.12),
-                        Color::srgb(0.74, 0.38, 0.18),
-                        Color::srgb(0.92, 0.58, 0.28),
-                    ),
-                    Ore::Coal => (
-                        Color::srgb(0.08, 0.08, 0.10),
-                        Color::srgb(0.14, 0.14, 0.17),
-                        Color::srgb(0.24, 0.24, 0.28),
-                    ),
+                let ore_tex = match ore {
+                    Ore::Iron   => textures.iron.clone(),
+                    Ore::Copper => textures.copper.clone(),
+                    Ore::Coal   => textures.coal.clone(),
                 };
                 let count = if chunk.ore_richness > 0.72 {
-                    7u32
-                } else if chunk.ore_richness > 0.44 {
                     5u32
+                } else if chunk.ore_richness > 0.44 {
+                    4u32
                 } else {
-                    3u32
+                    2u32
                 };
                 let ore_col = ore_tint(ore);
                 commands.spawn((
@@ -483,22 +469,18 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
-                    let sc = 0.06 + chunk.ore_richness * 0.06 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.04;
+                    let sc = 0.16 + chunk.ore_richness * 0.12 + hash01(x + i as i32, y + i as i32 * 2, seed ^ 0xF005) * 0.06;
                     let px = sx + nx * tw * 0.66;
                     let py = sy + ny * th * 0.66;
                     let w = tw * sc;
                     let h = th * sc;
+                    let mut ore_sprite = Sprite::from_image(ore_tex.clone());
+                    ore_sprite.custom_size = Some(Vec2::new(w, h));
+                    ore_sprite.color = ore_col.with_alpha((0.56 + chunk.ore_richness * 0.28).clamp(0.56, 0.86));
+                    commands.spawn((ore_sprite, Transform::from_xyz(px, py, z + 0.0030 + i as f32 * 0.00004)));
                     commands.spawn((
-                        Sprite::from_color(ore_dark.with_alpha(0.62), Vec2::new(w * 1.15, h * 1.15)),
+                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.18), Vec2::new(w * 1.08, h * 0.65)),
                         Transform::from_xyz(px + w * 0.10, py - h * 0.14, z + 0.0029 + i as f32 * 0.00004),
-                    ));
-                    commands.spawn((
-                        Sprite::from_color(ore_mid.with_alpha(0.90), Vec2::new(w, h)),
-                        Transform::from_xyz(px, py, z + 0.003 + i as f32 * 0.00004),
-                    ));
-                    commands.spawn((
-                        Sprite::from_color(ore_light.with_alpha(0.78), Vec2::new(w * 0.38, h * 0.36)),
-                        Transform::from_xyz(px - w * 0.16, py + h * 0.16, z + 0.0031 + i as f32 * 0.00004),
                     ));
                 }
             }
@@ -612,18 +594,7 @@ fn spawn_world(commands: &mut Commands, world: &WorldMap, textures: &TileTexture
                 }
             }
 
-            // --- LANDMARK MARKER ---
-            if let Some(lm) = chunk.landmark {
-                let (col, glow) = landmark_colors(lm);
-                commands.spawn((
-                    Sprite::from_color(glow.with_alpha(0.18), Vec2::new(tw * 0.70, th * 0.70)),
-                    Transform::from_xyz(sx, sy, z + 0.005),
-                ));
-                commands.spawn((
-                    Sprite::from_color(col, Vec2::new(tw * 0.20, th * 0.24)),
-                    Transform::from_xyz(sx, sy + th * 0.05, z + 0.006),
-                ));
-            }
+            // Landmark placeholder marker intentionally removed.
         }
     }
 }
