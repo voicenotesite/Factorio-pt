@@ -8,6 +8,8 @@ const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
 const RENDER_RADIUS_X: i32 = 56;
 const RENDER_RADIUS_Y: i32 = 36;
+const STREAM_REBUILD_STEP_X: i32 = 12;
+const STREAM_REBUILD_STEP_Y: i32 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Terrain {
@@ -72,6 +74,12 @@ struct Player;
 struct PlayerAnim {
     timer: Timer,
     frame: usize,
+}
+
+#[derive(Component)]
+struct PlayerSafety {
+    blocked_for: f32,
+    last_safe: Vec2,
 }
 
 #[derive(Component)]
@@ -180,6 +188,10 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             timer: Timer::from_seconds(0.09, TimerMode::Repeating),
             frame: 0,
         },
+        PlayerSafety {
+            blocked_for: 0.0,
+            last_safe: start,
+        },
     ));
 
     commands.spawn((
@@ -205,11 +217,11 @@ fn player_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     world: Res<WorldMap>,
-    mut player_q: Query<&mut Transform, With<Player>>,
+    mut player_q: Query<(&mut Transform, &mut PlayerSafety), With<Player>>,
     mut cam_q: Query<&mut Projection, With<CameraRig>>,
     mut cam_tr_q: Query<&mut Transform, (With<CameraRig>, Without<Player>)>,
 ) {
-    let Ok(mut pt) = player_q.single_mut() else { return; };
+    let Ok((mut pt, mut safety)) = player_q.single_mut() else { return; };
 
     let mut dir = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) { dir.y += 1.0; }
@@ -221,17 +233,42 @@ fn player_movement(
         let speed = 220.0 * time.delta_secs();
         let delta = dir.normalize() * speed;
         let next = pt.translation + delta;
+        let mut moved = false;
         // No "Jesus walking": player cannot enter water tiles.
         if is_walkable(&world, next.truncate()) {
             pt.translation = next;
+            moved = true;
         } else {
             // Sliding along coast/walls feels better than hard stop.
             let x_only = Vec3::new(pt.translation.x + delta.x, pt.translation.y, pt.translation.z);
             let y_only = Vec3::new(pt.translation.x, pt.translation.y + delta.y, pt.translation.z);
             if is_walkable(&world, x_only.truncate()) {
                 pt.translation = x_only;
+                moved = true;
             } else if is_walkable(&world, y_only.truncate()) {
                 pt.translation = y_only;
+                moved = true;
+            }
+        }
+
+        if moved {
+            safety.blocked_for = 0.0;
+            safety.last_safe = pt.translation.truncate();
+        } else {
+            safety.blocked_for += time.delta_secs();
+            // Fail-safe against getting trapped at coast/choke points.
+            if safety.blocked_for > 0.40 {
+                if let Some(unstuck) = nearest_walkable_position(&world, pt.translation.truncate(), 8) {
+                    pt.translation.x = unstuck.x;
+                    pt.translation.y = unstuck.y;
+                    safety.last_safe = unstuck;
+                    safety.blocked_for = 0.0;
+                } else if let Some(unstuck) = nearest_walkable_position(&world, safety.last_safe, 8) {
+                    pt.translation.x = unstuck.x;
+                    pt.translation.y = unstuck.y;
+                    safety.last_safe = unstuck;
+                    safety.blocked_for = 0.0;
+                }
             }
         }
 
@@ -325,7 +362,9 @@ fn stream_visible_world(
         visible.0 = Some(center);
         return;
     };
-    if (center.0 - prev.0).abs() < 6 && (center.1 - prev.1).abs() < 6 {
+    if (center.0 - prev.0).abs() < STREAM_REBUILD_STEP_X
+        && (center.1 - prev.1).abs() < STREAM_REBUILD_STEP_Y
+    {
         return;
     }
     for e in &visuals_q {
@@ -479,6 +518,10 @@ fn spawn_world(
             let sx = offset_x + x as f32 * tw;
             let sy = offset_y + y as f32 * th;
             let z = y as f32 * 0.01 + chunk.elevation * 0.005;
+            let dx = (x - center.0).abs();
+            let dy = (y - center.1).abs();
+            let near_detail = dx <= 26 && dy <= 18;
+            let mid_detail = dx <= 40 && dy <= 26;
 
             let mut shore = 0.0;
             let mut depth = 0.0;
@@ -526,14 +569,33 @@ fn spawn_world(
             let mut base = Sprite::from_image(img);
             base.custom_size = Some(tile_size);
             base.color = Color::srgb(tr, tg, tb);
-            let mut ec = commands.spawn((base, Transform::from_xyz(sx, sy, z), WorldVisual));
+            let base_entity = commands.spawn((base, Transform::from_xyz(sx, sy, z), WorldVisual)).id();
+            if chunk.terrain != Terrain::Water && near_detail {
+                // Mini-tiles: subtle sub-tile breakup for richer ground look.
+                let mt_a = hash01(x + 101, y + 19, seed ^ 0xA55A);
+                let mt_b = hash01(x + 47, y + 73, seed ^ 0x5AA5);
+                let mini_alpha_a = 0.05 + mt_a * 0.05;
+                let mini_alpha_b = 0.04 + mt_b * 0.04;
+                let mini_col_a = mix_color(final_tint, Color::WHITE, 0.08);
+                let mini_col_b = mix_color(final_tint, Color::BLACK, 0.10);
+                commands.spawn((
+                    Sprite::from_color(mini_col_a.with_alpha(mini_alpha_a), Vec2::new(tw * 0.42, th * 0.34)),
+                    Transform::from_xyz(sx - tw * 0.16, sy + th * 0.12, z + 0.0016),
+                    WorldVisual,
+                ));
+                commands.spawn((
+                    Sprite::from_color(mini_col_b.with_alpha(mini_alpha_b), Vec2::new(tw * 0.36, th * 0.28)),
+                    Transform::from_xyz(sx + tw * 0.18, sy - th * 0.14, z + 0.0017),
+                    WorldVisual,
+                ));
+            }
             if chunk.terrain == Terrain::Water {
-                ec.insert(WaterTile {
+                commands.entity(base_entity).insert(WaterTile {
                     phase: hash01(x, y, seed ^ 0x7777) * std::f32::consts::TAU,
                     depth,
                     shore,
                 });
-                if shore > 0.05 {
+                if shore > 0.05 && mid_detail {
                     // soft shoreline foam for better land/water readability
                     commands.spawn((
                         Sprite::from_color(
@@ -553,25 +615,30 @@ fn spawn_world(
                     Ore::Copper => textures.copper.clone(),
                     Ore::Coal   => textures.coal.clone(),
                 };
-                let count = if chunk.ore_richness > 0.72 {
+                let mut count = if chunk.ore_richness > 0.72 {
                     5u32
                 } else if chunk.ore_richness > 0.44 {
                     4u32
                 } else {
                     2u32
                 };
+                if !near_detail {
+                    count = count.min(2);
+                }
                 let ore_col = ore_tint(ore);
-                commands.spawn((
-                    Sprite::from_color(
-                        ore_col.with_alpha((0.12 + chunk.ore_richness * 0.18).clamp(0.12, 0.30)),
-                        Vec2::new(
-                            tw * (0.36 + chunk.ore_richness * 0.28),
-                            th * (0.34 + chunk.ore_richness * 0.26),
+                if mid_detail {
+                    commands.spawn((
+                        Sprite::from_color(
+                            ore_col.with_alpha((0.10 + chunk.ore_richness * 0.16).clamp(0.10, 0.24)),
+                            Vec2::new(
+                                tw * (0.34 + chunk.ore_richness * 0.24),
+                                th * (0.30 + chunk.ore_richness * 0.22),
+                            ),
                         ),
-                    ),
-                    Transform::from_xyz(sx, sy, z + 0.0027),
-                    WorldVisual,
-                ));
+                        Transform::from_xyz(sx, sy, z + 0.0027),
+                        WorldVisual,
+                    ));
+                }
                 for i in 0..count {
                     let nx = hash01(x + i as i32 * 3, y,            seed ^ (0xF001 + i * 13)) - 0.5;
                     let ny = hash01(x,                 y + i as i32 * 3, seed ^ (0xF002 + i * 17)) - 0.5;
@@ -582,13 +649,15 @@ fn spawn_world(
                     let h = th * sc;
                     let mut ore_sprite = Sprite::from_image(ore_tex.clone());
                     ore_sprite.custom_size = Some(Vec2::new(w, h));
-                    ore_sprite.color = ore_col.with_alpha((0.56 + chunk.ore_richness * 0.28).clamp(0.56, 0.86));
+                    ore_sprite.color = ore_col.with_alpha((0.50 + chunk.ore_richness * 0.24).clamp(0.50, 0.80));
                     commands.spawn((ore_sprite, Transform::from_xyz(px, py, z + 0.0030 + i as f32 * 0.00004), WorldVisual));
-                    commands.spawn((
-                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.18), Vec2::new(w * 1.08, h * 0.65)),
-                        Transform::from_xyz(px + w * 0.10, py - h * 0.14, z + 0.0029 + i as f32 * 0.00004),
-                        WorldVisual,
-                    ));
+                    if near_detail {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.16), Vec2::new(w * 1.08, h * 0.65)),
+                            Transform::from_xyz(px + w * 0.10, py - h * 0.14, z + 0.0029 + i as f32 * 0.00004),
+                            WorldVisual,
+                        ));
+                    }
                 }
             }
 
@@ -599,20 +668,17 @@ fn spawn_world(
                     let blend = mix_color(final_tint, east_tint, 0.50);
                     let base_alpha = if chunk.terrain == Terrain::Water || east.terrain == Terrain::Water { 0.12 } else { 0.08 };
                     commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha * 0.50), Vec2::new(tw * 0.44, th * 0.96)),
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.44), Vec2::new(tw * 0.52, th * 0.98)),
                         Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0020),
                         WorldVisual,
                     ));
-                    commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha * 0.75), Vec2::new(tw * 0.28, th * 0.94)),
-                        Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0021),
-                        WorldVisual,
-                    ));
-                    commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.14, th * 0.90)),
-                        Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0022),
-                        WorldVisual,
-                    ));
+                    if near_detail {
+                        commands.spawn((
+                            Sprite::from_color(blend.with_alpha(base_alpha * 0.65), Vec2::new(tw * 0.28, th * 0.94)),
+                            Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0021),
+                            WorldVisual,
+                        ));
+                    }
                 }
             }
             if let Some(south) = chunk_at(x, y - 1) {
@@ -621,20 +687,17 @@ fn spawn_world(
                     let blend = mix_color(final_tint, south_tint, 0.50);
                     let base_alpha = if chunk.terrain == Terrain::Water || south.terrain == Terrain::Water { 0.11 } else { 0.07 };
                     commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha * 0.45), Vec2::new(tw * 0.95, th * 0.36)),
+                        Sprite::from_color(blend.with_alpha(base_alpha * 0.40), Vec2::new(tw * 0.97, th * 0.40)),
                         Transform::from_xyz(sx, sy - th * 0.5, z + 0.0020),
                         WorldVisual,
                     ));
-                    commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha * 0.70), Vec2::new(tw * 0.93, th * 0.24)),
-                        Transform::from_xyz(sx, sy - th * 0.5, z + 0.0021),
-                        WorldVisual,
-                    ));
-                    commands.spawn((
-                        Sprite::from_color(blend.with_alpha(base_alpha), Vec2::new(tw * 0.90, th * 0.14)),
-                        Transform::from_xyz(sx, sy - th * 0.5, z + 0.0022),
-                        WorldVisual,
-                    ));
+                    if near_detail {
+                        commands.spawn((
+                            Sprite::from_color(blend.with_alpha(base_alpha * 0.62), Vec2::new(tw * 0.93, th * 0.24)),
+                            Transform::from_xyz(sx, sy - th * 0.5, z + 0.0021),
+                            WorldVisual,
+                        ));
+                    }
                 }
             }
 
@@ -673,7 +736,7 @@ fn spawn_world(
             }
 
             // --- TREES: recognizable canopy dots with highlight ---
-            if chunk.tree_density > 0.62 && chunk.terrain != Terrain::Water {
+            if chunk.tree_density > 0.62 && chunk.terrain != Terrain::Water && mid_detail {
                 let tree_col = tree_color(chunk.biome, chunk.moisture);
                 let count = if chunk.tree_density > 0.82 { 3u32 } else if chunk.tree_density > 0.70 { 2u32 } else { 1u32 };
                 for t in 0..count {
@@ -685,12 +748,14 @@ fn spawn_world(
                     let px = sx + hx * tw * 0.68;
                     let py = sy + hy * th * 0.68;
                     // drop shadow
-                    commands.spawn((
-                        Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.14),
-                            Vec2::new(cw * 1.15, ch * 0.50)),
-                        Transform::from_xyz(px + cw * 0.12, py - ch * 0.28, z + 0.0038 + t as f32 * 0.0001),
-                        WorldVisual,
-                    ));
+                    if near_detail {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.14),
+                                Vec2::new(cw * 1.15, ch * 0.50)),
+                            Transform::from_xyz(px + cw * 0.12, py - ch * 0.28, z + 0.0038 + t as f32 * 0.0001),
+                            WorldVisual,
+                        ));
+                    }
                     // canopy
                     commands.spawn((
                         Sprite::from_color(tree_col, Vec2::new(cw, ch)),
@@ -698,18 +763,20 @@ fn spawn_world(
                         WorldVisual,
                     ));
                     // highlight
-                    let tc = tree_col.to_srgba();
-                    let hcol = Color::srgba(
-                        (tc.red   + 0.18).min(1.0),
-                        (tc.green + 0.22).min(1.0),
-                        (tc.blue  + 0.10).min(1.0),
-                        0.60,
-                    );
-                    commands.spawn((
-                        Sprite::from_color(hcol, Vec2::new(cw * 0.45, ch * 0.45)),
-                        Transform::from_xyz(px - cw * 0.08, py + ch * 0.12, z + 0.0041 + t as f32 * 0.0001),
-                        WorldVisual,
-                    ));
+                    if near_detail {
+                        let tc = tree_col.to_srgba();
+                        let hcol = Color::srgba(
+                            (tc.red   + 0.18).min(1.0),
+                            (tc.green + 0.22).min(1.0),
+                            (tc.blue  + 0.10).min(1.0),
+                            0.60,
+                        );
+                        commands.spawn((
+                            Sprite::from_color(hcol, Vec2::new(cw * 0.45, ch * 0.45)),
+                            Transform::from_xyz(px - cw * 0.08, py + ch * 0.12, z + 0.0041 + t as f32 * 0.0001),
+                            WorldVisual,
+                        ));
+                    }
                 }
             }
 
@@ -1068,6 +1135,36 @@ fn is_walkable(world: &WorldMap, pos: Vec2) -> bool {
     let Some((x, y)) = screen_to_chunk(world, pos) else { return false; };
     let idx = (y * world.width + x) as usize;
     world.chunks[idx].terrain != Terrain::Water
+}
+
+fn nearest_walkable_position(world: &WorldMap, from: Vec2, max_radius: i32) -> Option<Vec2> {
+    let (cx, cy) = screen_to_chunk(world, from)?;
+    let tw = CHUNK_SIZE;
+    let th = CHUNK_SIZE * ISO_Y_RATIO;
+    let (ox, oy) = world_offsets(world);
+    for r in 1..=max_radius {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
+                let x = cx + dx;
+                let y = cy + dy;
+                if x < 0 || y < 0 || x >= world.width || y >= world.height {
+                    continue;
+                }
+                let idx = (y * world.width + x) as usize;
+                if world.chunks[idx].terrain == Terrain::Water {
+                    continue;
+                }
+                return Some(Vec2::new(
+                    ox + x as f32 * tw,
+                    oy + y as f32 * th,
+                ));
+            }
+        }
+    }
+    None
 }
 
 fn world_bounds(world: &WorldMap) -> (f32, f32, f32, f32) {
