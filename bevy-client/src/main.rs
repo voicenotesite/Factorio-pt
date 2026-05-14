@@ -6,8 +6,8 @@ const WORLD_H: i32 = 260;
 const CHUNK_SIZE: f32 = 56.0;
 const ISO_Y_RATIO: f32 = 0.60;
 const LANDMARK_REGION: i32 = 14;
-const RENDER_RADIUS_X: i32 = 56;
-const RENDER_RADIUS_Y: i32 = 36;
+const RENDER_RADIUS_X: i32 = 46;
+const RENDER_RADIUS_Y: i32 = 30;
 const STREAM_REBUILD_STEP_X: i32 = 12;
 const STREAM_REBUILD_STEP_Y: i32 = 8;
 
@@ -92,6 +92,12 @@ struct WaterTile {
     shore: f32,
 }
 
+#[derive(Component)]
+struct ShoreFoam {
+    phase: f32,
+    strength: f32,
+}
+
 #[derive(Resource)]
 struct TileTextures {
     water: Handle<Image>,
@@ -147,6 +153,7 @@ fn main() {
                 camera_follow.after(player_movement),
                 animate_player,
                 animate_water,
+                animate_shoreline,
                 pixel_rounding,
             ),
         )
@@ -337,10 +344,13 @@ fn animate_player(
     if !moving {
         anim.frame = 0;
         sprite.image = anim_res.frames[0].clone();
+        sprite.color = Color::srgba(1.0, 1.0, 1.0, 1.0);
         anim.timer.reset();
         return;
     }
     anim.timer.tick(time.delta());
+    let pulse = (time.elapsed_secs() * 6.0).sin() * 0.04;
+    sprite.color = Color::srgba(1.0, (0.96 + pulse).clamp(0.90, 1.0), (0.92 + pulse * 0.6).clamp(0.86, 1.0), 1.0);
     if anim.timer.just_finished() {
         anim.frame = (anim.frame + 1) % anim_res.frames.len();
         sprite.image = anim_res.frames[anim.frame].clone();
@@ -485,6 +495,15 @@ fn animate_water(time: Res<Time>, mut q: Query<(&mut Sprite, &WaterTile)>) {
     }
 }
 
+fn animate_shoreline(time: Res<Time>, mut q: Query<(&mut Sprite, &ShoreFoam)>) {
+    let t = time.elapsed_secs();
+    for (mut sprite, foam) in &mut q {
+        let wave = (t * 3.1 + foam.phase).sin() * 0.5 + 0.5;
+        let a = (0.04 + foam.strength * 0.10 + wave * 0.06 * foam.strength).clamp(0.03, 0.20);
+        sprite.color = Color::srgba(0.88, 0.94, 0.98, a);
+    }
+}
+
 fn spawn_world(
     commands: &mut Commands,
     world: &WorldMap,
@@ -563,9 +582,12 @@ fn spawn_world(
                 terrain_tint
             };
 
-            let tr = (final_tint.to_srgba().red   * var).min(1.0);
-            let tg = (final_tint.to_srgba().green * var).min(1.0);
-            let tb = (final_tint.to_srgba().blue  * var).min(1.0);
+            let nw_e = chunk_at(x - 1, y + 1).map(|c| c.elevation).unwrap_or(chunk.elevation);
+            let se_e = chunk_at(x + 1, y - 1).map(|c| c.elevation).unwrap_or(chunk.elevation);
+            let light = (1.0 + (nw_e - se_e) * 0.22).clamp(0.90, 1.10);
+            let tr = (final_tint.to_srgba().red   * var * light).min(1.0);
+            let tg = (final_tint.to_srgba().green * var * light).min(1.0);
+            let tb = (final_tint.to_srgba().blue  * var * light).min(1.0);
             let mut base = Sprite::from_image(img);
             base.custom_size = Some(tile_size);
             base.color = Color::srgb(tr, tg, tb);
@@ -605,6 +627,43 @@ fn spawn_world(
                         Transform::from_xyz(sx, sy, z + 0.0025),
                         WorldVisual,
                     ));
+                }
+                if near_detail {
+                    let foam_strength = shore.clamp(0.0, 1.0);
+                    let edge_w = tw * 0.16;
+                    let edge_h = th * 0.20;
+                    if chunk_at(x - 1, y).map(|c| c.terrain) != Some(Terrain::Water) {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.88, 0.94, 0.98, 0.10), Vec2::new(edge_w, th * 0.84)),
+                            Transform::from_xyz(sx - tw * 0.5, sy, z + 0.0026),
+                            ShoreFoam { phase: hash01(x - 1, y, seed ^ 0x7331) * std::f32::consts::TAU, strength: foam_strength },
+                            WorldVisual,
+                        ));
+                    }
+                    if chunk_at(x + 1, y).map(|c| c.terrain) != Some(Terrain::Water) {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.88, 0.94, 0.98, 0.10), Vec2::new(edge_w, th * 0.84)),
+                            Transform::from_xyz(sx + tw * 0.5, sy, z + 0.0026),
+                            ShoreFoam { phase: hash01(x + 1, y, seed ^ 0x7332) * std::f32::consts::TAU, strength: foam_strength },
+                            WorldVisual,
+                        ));
+                    }
+                    if chunk_at(x, y - 1).map(|c| c.terrain) != Some(Terrain::Water) {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.88, 0.94, 0.98, 0.10), Vec2::new(tw * 0.84, edge_h)),
+                            Transform::from_xyz(sx, sy - th * 0.5, z + 0.0026),
+                            ShoreFoam { phase: hash01(x, y - 1, seed ^ 0x7333) * std::f32::consts::TAU, strength: foam_strength },
+                            WorldVisual,
+                        ));
+                    }
+                    if chunk_at(x, y + 1).map(|c| c.terrain) != Some(Terrain::Water) {
+                        commands.spawn((
+                            Sprite::from_color(Color::srgba(0.88, 0.94, 0.98, 0.10), Vec2::new(tw * 0.84, edge_h)),
+                            Transform::from_xyz(sx, sy + th * 0.5, z + 0.0026),
+                            ShoreFoam { phase: hash01(x, y + 1, seed ^ 0x7334) * std::f32::consts::TAU, strength: foam_strength },
+                            WorldVisual,
+                        ));
+                    }
                 }
             }
 
@@ -900,13 +959,14 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
             let detail = fbm(fx * 8.2 - 4.0, fy * 8.2 + 2.7, seed ^ 0x2202, 3, 2.0, 0.48);
             let elevation = clamp01(base * 0.78 + detail * 0.22);
 
-            // --- MOISTURE ---
-            let wet = fbm(fx * 4.5 + 7.0, fy * 4.5 - 3.0, seed ^ 0x3303, 4, 2.0, 0.54);
-            let moisture = clamp01(wet * 0.72 + (1.0 - elevation) * 0.28);
-
-            // --- HEAT ---
-            let heat_noise = fbm(fx * 3.1 - 9.0, fy * 3.1 + 5.0, seed ^ 0x4404, 3, 2.0, 0.50);
-            let temp = clamp01(heat_noise * 0.65 + 0.35 - elevation * 0.25);
+            // --- MOISTURE + HEAT with macro climate regions ---
+            let wet_local = fbm(fx * 4.5 + 7.0, fy * 4.5 - 3.0, seed ^ 0x3303, 4, 2.0, 0.54);
+            let wet_region = fbm(fx * 1.35 - 2.0, fy * 1.35 + 1.0, seed ^ 0x3313, 3, 2.0, 0.58);
+            let heat_local = fbm(fx * 3.1 - 9.0, fy * 3.1 + 5.0, seed ^ 0x4404, 3, 2.0, 0.50);
+            let heat_region = fbm(fx * 1.15 + 4.0, fy * 1.15 - 6.0, seed ^ 0x4414, 3, 2.0, 0.56);
+            let latitude = 1.0 - ((fy - 0.5).abs() * 2.0); // warmer center, colder poles
+            let moisture = clamp01(wet_region * 0.52 + wet_local * 0.30 + (1.0 - elevation) * 0.18);
+            let temp = clamp01(heat_region * 0.42 + heat_local * 0.26 + latitude * 0.42 - elevation * 0.24);
 
             // --- TERRAIN ---
             let terrain = if elevation < 0.38 {
@@ -921,16 +981,16 @@ fn generate_world(seed: u32, width: i32, height: i32) -> WorldMap {
                 Terrain::Mountain
             };
 
-            // --- BIOME ---
+            // --- BIOME (region-driven, less noisy patchwork) ---
             let biome = if terrain == Terrain::Water {
                 if temp < 0.28 { Biome::Frozen } else { Biome::Wetland }
             } else if temp < 0.26 {
                 Biome::Frozen
-            } else if moisture < 0.25 && temp > 0.58 {
+            } else if moisture < 0.28 && temp > 0.60 {
                 Biome::Desert
-            } else if moisture > 0.68 {
+            } else if moisture > 0.70 {
                 Biome::Wetland
-            } else if temp > 0.74 && moisture < 0.44 {
+            } else if temp > 0.76 && moisture < 0.48 {
                 Biome::Volcanic
             } else {
                 Biome::Temperate
@@ -1273,7 +1333,7 @@ fn select_good_world(width: i32, height: i32) -> (u32, WorldMap) {
     let mut best_seed = base;
     let mut best_world = generate_world(base, width, height);
     let mut best_score = world_score(&best_world);
-    for i in 1..48u32 {
+    for i in 1..24u32 {
         let seed = base.wrapping_add(i.wrapping_mul(2654435761));
         let world = generate_world(seed, width, height);
         let score = world_score(&world);
